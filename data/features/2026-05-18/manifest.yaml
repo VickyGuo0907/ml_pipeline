@@ -1,0 +1,11 @@
+run_id: '2026-05-18'
+source: engineered features
+stage: feature_engineer
+train:
+  path: data/features/2026-05-18/train.parquet
+  rows: 13762
+  columns: 30
+test:
+  path: data/features/2026-05-18/test.parquet
+  rows: 3441
+  columns: 30

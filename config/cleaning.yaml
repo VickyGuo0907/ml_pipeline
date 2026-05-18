@@ -1,0 +1,27 @@
+# Data Cleaning Configuration
+
+# Strategy for handling missing values: drop, mean, median, forward_fill, backward_fill
+missing_strategy: "drop"
+
+# Columns to check for exact duplicates (null = check all columns)
+duplicates_subset: null
+
+# Sequential cleaning steps
+steps:
+  - name: "type_coercion"
+    type: "coerce_types"
+    columns: null
+    params:
+      force_numeric: false
+
+  - name: "drop_na"
+    type: "drop_missing"
+    columns: null
+    params:
+      threshold: 0.5  # Drop columns with >50% missing
+
+  - name: "remove_duplicates"
+    type: "deduplicate"
+    columns: null
+    params:
+      keep: "first"

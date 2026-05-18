@@ -1,0 +1,102 @@
+# ML Pipeline POC — Project Context
+
+## Goal
+Build an end-to-end ML pipeline POC on local docker-compose, designed to demonstrate viability for large-scale deployment. Generic tabular ML template, not tied to a specific use case. Currently exercising the pipeline with CMS Hospital Compare CSV data.
+
+## Stack (locked)
+- **Orchestrator:** Apache Airflow 3
+- **Data validation:** pandera
+- **EDA / profiling:** ydata-profiling
+- **Data manipulation:** pandas
+- **Storage:** Local Parquet, bind-mounted Docker volumes (no MinIO, no S3)
+- **Versioning:** DVC for data, git for code
+- **Experiment tracking + model registry:** MLflow with Postgres backend, local filesystem artifact store
+- **Modeling:** scikit-learn + LightGBM (regularized linear baseline + gradient boosting)
+- **Serving:** FastAPI
+- **Drift monitoring:** Evidently AI (on-demand inside training DAG)
+- **Config:** YAML files + pydantic models for validation
+- **Dependencies:** uv (not pip, not poetry)
+- **Secrets:** .env file (gitignored) + .env.example committed
+- **Testing:** pandera schemas + unit tests + one integration test
+
+## Design decisions (locked, do not revisit)
+- **Config depth:** light — target column, problem type, sources in pipeline.yaml; cleaning/features/models YAMLs hold recipes called by code. Code is not fully generic.
+- **DAG structure:** one Airflow DAG with task groups, not multiple DAGs
+- **Model promotion:** every trained model registers to Staging. NO auto-promotion to Production — manual UI click only.
+- **Drift monitoring:** on-demand, runs as final task in training DAG
+- **Testing scope:** pandera at every storage boundary + unit tests for clean/feature functions + one end-to-end integration test
+- **Host OS:** macOS
+
+## Pipeline stages (8, one DAG)
+1. ingest — move files from data/landing to data/raw/<run_id>, write manifest.yaml with checksums
+2. validate_raw — pandera schema check per source file
+3. profile — ydata-profiling HTML report per source
+4. clean — type coercion, missing handling, dedup → data/interim/<run_id>/*.parquet
+5. feature_engineer — joins, encoding, NZV filter, train/test split → data/features/<run_id>/{train,test}.parquet
+6. validate_features — pandera schema check on feature matrix
+7. train — sklearn + lightgbm, MLflow autolog, both models per run
+8. evaluate_and_register — compute metrics, register to MLflow Staging
+9. drift_report — Evidently HTML, compares current features to previous training set
+
+Serving (FastAPI) runs as always-on container, NOT a DAG stage. Loads model tagged Production from MLflow registry.
+
+## Repo layout
+ml-pipeline/
+├── docker-compose.yml
+├── .env.example
+├── .gitignore
+├── README.md
+├── pyproject.toml
+├── uv.lock
+├── dags/pipeline.py
+├── src/
+│   ├── ingest.py, validate.py, profile.py, clean.py
+│   ├── features.py, train.py, evaluate.py, register.py
+│   ├── serve.py, monitoring.py
+│   ├── schemas/{raw.py, features.py}
+│   └── utils/{config.py, io.py}
+├── config/
+│   ├── pipeline.yaml, cleaning.yaml, features.yaml, models.yaml
+├── data/{landing,raw,interim,features}/
+├── mlflow-artifacts/
+├── reports/
+├── tests/{test_schemas.py, test_clean.py, test_features.py, test_integration.py}
+└── notebooks/
+
+## docker-compose services (7)
+- airflow-webserver (:8080), airflow-scheduler, airflow-triggerer
+- airflow-postgres (Airflow metadata DB)
+- mlflow-server (:5000)
+- mlflow-postgres (MLflow tracking DB, separate from Airflow's)
+- fastapi (:8000)
+
+Two Postgres instances to avoid schema mixing. FastAPI mounts mlflow-artifacts as read-only.
+
+## Sample dataset
+CMS Hospital Compare CSVs. Multi-file, real, messy. Files in data/landing/.
+Target column for the demo run: ExcessReadmissionRatio for pneumonia (continuous regression).
+Predictors include quality measures, HCAHPS scores, and hospital info — see previous R-based exploration that produced a 4,802 × 30 feature matrix.
+
+## Build order (do these in sequence; confirm each works before moving on)
+1. docker-compose.yml + .env.example + skeleton dirs → all 7 services healthy
+2. pyproject.toml + uv.lock → dependency set pinned
+3. Pydantic config models + sample YAMLs → config loading works in isolation
+4. pandera schemas (raw + features) → schemas importable and testable
+5. DAG skeleton with stub tasks → Airflow UI shows full pipeline graph
+6. Stage implementations in pipeline order: ingest → validate → profile → clean → features → validate features → train → evaluate/register → drift
+7. FastAPI serving → /predict and /health working against registered model
+8. Tests → schemas, units, one integration
+9. README → clone-to-prediction path documented
+
+## Hard rules
+- Do NOT introduce Kubernetes, Feast, Optuna, Ray Tune, MinIO, or streaming components. They are explicitly out of scope.
+- Do NOT auto-promote models to Production.
+- Do NOT skip the manifest.yaml at storage boundaries. Versioning without manifests is a lie.
+- Do NOT use pip or poetry. Use uv.
+- Do NOT commit data/, mlflow-artifacts/, reports/, or .env. Gitignore them.
+
+## Conventions
+- Type hints on all function signatures.
+- Pandera schemas validate every Parquet at boundaries.
+- Manifests (YAML) written alongside every dated data output.
+- Run IDs are ISO dates (e.g., 2026-05-15) or Airflow's logical_date.

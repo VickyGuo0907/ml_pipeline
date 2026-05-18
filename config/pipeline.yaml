@@ -1,0 +1,22 @@
+# ML Pipeline Configuration
+# Root configuration that ties together sources, target, and problem definition
+
+# Data sources: all CSV files from data/landing will be ingested
+sources:
+  - name: "hospital_compare_pneumonia"
+    path: "data/landing"
+    format: "csv"
+
+# Target column for modeling
+target:
+  name: "Excess Readmission Ratio"
+  type: "continuous"
+
+# Problem formulation: regression task
+problem_type: "regression"
+
+# Global train/test split (applied in feature_engineer stage)
+train_test_split: 0.8
+
+# Random seed for reproducibility
+random_state: 42

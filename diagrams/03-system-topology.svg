@@ -1,0 +1,166 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 850">
+  <defs>
+    <style>
+      text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+      .title { font-size: 24px; font-weight: bold; fill: #1f2937; }
+      .subtitle { font-size: 13px; fill: #6b7280; }
+      .service-name { font-size: 12px; font-weight: 600; fill: #1f2937; }
+      .label { font-size: 11px; fill: #374151; }
+    </style>
+    <marker id="arrow-blue" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#2563eb"/>
+    </marker>
+    <marker id="arrow-green" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#10b981"/>
+    </marker>
+  </defs>
+  <!-- Background -->
+  <rect width="1200" height="850" fill="#ffffff"/>
+  <!-- Title -->
+  <text x="600" y="35" class="title" text-anchor="middle">System Topology &amp; Infrastructure</text>
+  <text x="600" y="55" class="subtitle" text-anchor="middle">Docker Compose Deployment with Services and Volumes</text>
+
+  <!-- Docker Host (macOS) Container -->
+  <rect x="30" y="80" width="1140" height="740" fill="#f9fafb" stroke="#d1d5db" stroke-width="2" rx="4"/>
+  <text x="50" y="105" class="subtitle" font-weight="bold" fill="#374151">Docker Host (macOS)</text>
+
+  <!-- Web Services Zone -->
+  <rect x="50" y="125" width="540" height="300" fill="none" stroke="#bfdbfe" stroke-width="2" stroke-dasharray="5,5" rx="4"/>
+  <text x="70" y="145" class="subtitle" fill="#1e40af">WEB SERVICES</text>
+
+  <!-- Airflow Webserver -->
+  <rect x="70" y="165" width="220" height="70" fill="#dbeafe" stroke="#3b82f6" stroke-width="2" rx="4"/>
+  <circle cx="90" cy="185" r="16" fill="#3b82f6"/>
+  <text x="90" y="191" class="label" text-anchor="middle" fill="#ffffff" font-weight="bold">🌐</text>
+  <text x="140" y="185" class="service-name" fill="#1e40af">Airflow Webserver</text>
+  <text x="140" y="205" class="label" fill="#3b82f6">:8080 (HTTP)</text>
+  <text x="140" y="220" class="label" fill="#6b7280">Task execution UI</text>
+
+  <!-- Airflow Scheduler -->
+  <rect x="70" y="250" width="100" height="60" fill="#dbeafe" stroke="#3b82f6" stroke-width="2" rx="4"/>
+  <circle cx="85" cy="265" r="14" fill="#3b82f6"/>
+  <text x="85" y="270" class="label" text-anchor="middle" fill="#ffffff" font-weight="bold">⏱</text>
+  <text x="125" y="270" class="service-name" fill="#1e40af" font-size="11">Scheduler</text>
+  <text x="125" y="285" class="label" fill="#6b7280" font-size="10">Orchestrator</text>
+
+  <!-- Airflow Triggerer -->
+  <rect x="190" y="250" width="100" height="60" fill="#dbeafe" stroke="#3b82f6" stroke-width="2" rx="4"/>
+  <circle cx="205" cy="265" r="14" fill="#3b82f6"/>
+  <text x="205" y="270" class="label" text-anchor="middle" fill="#ffffff" font-weight="bold">→</text>
+  <text x="245" y="270" class="service-name" fill="#1e40af" font-size="11">Triggerer</text>
+  <text x="245" y="285" class="label" fill="#6b7280" font-size="10">Event triggers</text>
+
+  <!-- MLflow Server -->
+  <rect x="330" y="165" width="220" height="70" fill="#e9d5ff" stroke="#8b5cf6" stroke-width="2" rx="4"/>
+  <circle cx="350" cy="185" r="16" fill="#8b5cf6"/>
+  <text x="350" y="191" class="label" text-anchor="middle" fill="#ffffff" font-weight="bold">📊</text>
+  <text x="400" y="185" class="service-name" fill="#6d28d9">MLflow Server</text>
+  <text x="400" y="205" class="label" fill="#8b5cf6">:5001 (HTTP)</text>
+  <text x="400" y="220" class="label" fill="#6b7280">Model registry</text>
+
+  <!-- FastAPI Server -->
+  <rect x="330" y="250" width="220" height="60" fill="#cffafe" stroke="#06b6d4" stroke-width="2" rx="4"/>
+  <circle cx="350" cy="265" r="14" fill="#06b6d4"/>
+  <text x="350" y="270" class="label" text-anchor="middle" fill="#ffffff" font-weight="bold">⚙</text>
+  <text x="400" y="270" class="service-name" fill="#0891b2">FastAPI</text>
+  <text x="400" y="285" class="label" fill="#06b6d4">:8000 — Serving</text>
+
+  <!-- Database Zone -->
+  <rect x="50" y="440" width="540" height="200" fill="none" stroke="#fecaca" stroke-width="2" stroke-dasharray="5,5" rx="4"/>
+  <text x="70" y="460" class="subtitle" fill="#991b1b">DATABASES (PostgreSQL 16)</text>
+
+  <!-- Airflow Postgres -->
+  <rect x="70" y="480" width="220" height="75" fill="#fee2e2" stroke="#f87171" stroke-width="2" rx="4"/>
+  <circle cx="90" cy="505" r="16" fill="#f87171"/>
+  <text x="90" y="511" class="label" text-anchor="middle" fill="#ffffff" font-weight="bold">🗄</text>
+  <text x="140" y="505" class="service-name" fill="#991b1b">Airflow Postgres</text>
+  <text x="140" y="525" class="label" fill="#f87171">:5432</text>
+  <text x="140" y="540" class="label" fill="#6b7280">DAG metadata, logs</text>
+
+  <!-- MLflow Postgres -->
+  <rect x="330" y="480" width="220" height="75" fill="#fee2e2" stroke="#f87171" stroke-width="2" rx="4"/>
+  <circle cx="350" cy="505" r="16" fill="#f87171"/>
+  <text x="350" y="511" class="label" text-anchor="middle" fill="#ffffff" font-weight="bold">🗄</text>
+  <text x="400" y="505" class="service-name" fill="#991b1b">MLflow Postgres</text>
+  <text x="400" y="525" class="label" fill="#f87171">:5433</text>
+  <text x="400" y="540" class="label" fill="#6b7280">Model tracking DB</text>
+
+  <!-- Storage &amp; Volumes Zone -->
+  <rect x="620" y="125" width="520" height="515" fill="none" stroke="#d1e7dd" stroke-width="2" stroke-dasharray="5,5" rx="4"/>
+  <text x="640" y="145" class="subtitle" fill="#15803d">BIND MOUNTS (Host Filesystem)</text>
+
+  <!-- Data Volume Tree -->
+  <rect x="640" y="165" width="480" height="270" fill="#ecfdf5" stroke="#10b981" stroke-width="1" rx="3"/>
+  <text x="660" y="185" class="service-name" fill="#059669">data/ (Root)</text>
+
+  <rect x="670" y="205" width="110" height="50" fill="#ffffff" stroke="#10b981" stroke-width="1" rx="2"/>
+  <text x="725" y="225" class="label" text-anchor="middle" fill="#059669">landing/</text>
+  <text x="725" y="240" class="label" text-anchor="middle" fill="#6b7280" font-size="9">(input CSVs)</text>
+
+  <rect x="800" y="205" width="110" height="50" fill="#ffffff" stroke="#10b981" stroke-width="1" rx="2"/>
+  <text x="855" y="225" class="label" text-anchor="middle" fill="#059669">raw/</text>
+  <text x="855" y="240" class="label" text-anchor="middle" fill="#6b7280" font-size="9">(manifest)</text>
+
+  <rect x="930" y="205" width="110" height="50" fill="#ffffff" stroke="#10b981" stroke-width="1" rx="2"/>
+  <text x="985" y="225" class="label" text-anchor="middle" fill="#059669">interim/</text>
+  <text x="985" y="240" class="label" text-anchor="middle" fill="#6b7280" font-size="9">(cleaned)</text>
+
+  <rect x="1060" y="205" width="110" height="50" fill="#ffffff" stroke="#10b981" stroke-width="1" rx="2"/>
+  <text x="1115" y="225" class="label" text-anchor="middle" fill="#059669">features/</text>
+  <text x="1115" y="240" class="label" text-anchor="middle" fill="#6b7280" font-size="9">(train/test)</text>
+
+  <rect x="670" y="270" width="150" height="50" fill="#ffffff" stroke="#f59e0b" stroke-width="1" rx="2"/>
+  <text x="745" y="290" class="label" text-anchor="middle" fill="#b45309">mlflow-artifacts/</text>
+  <text x="745" y="305" class="label" text-anchor="middle" fill="#6b7280" font-size="9">(models, reports)</text>
+
+  <rect x="840" y="270" width="150" height="50" fill="#ffffff" stroke="#f59e0b" stroke-width="1" rx="2"/>
+  <text x="915" y="290" class="label" text-anchor="middle" fill="#b45309">reports/</text>
+  <text x="915" y="305" class="label" text-anchor="middle" fill="#6b7280" font-size="9">(HTML EDA, drift)</text>
+
+  <text x="670" y="350" class="label" fill="#059669" font-size="10" font-weight="600">Mount Points in Containers:</text>
+  <text x="690" y="368" class="label" fill="#6b7280" font-size="9">• Airflow: /home/airflow/data/ → data/</text>
+  <text x="690" y="383" class="label" fill="#6b7280" font-size="9">• MLflow: /artifacts/ → mlflow-artifacts/</text>
+  <text x="690" y="398" class="label" fill="#6b7280" font-size="9">• FastAPI: /artifacts/ (read-only)</text>
+  <text x="690" y="413" class="label" fill="#6b7280" font-size="9">All services share same volumes</text>
+  <text x="690" y="428" class="label" fill="#6b7280" font-size="9">for data versioning &amp; lineage</text>
+
+  <!-- Network Connections -->
+  <!-- Airflow Services to Airflow Postgres -->
+  <line x1="130" y1="250" x2="130" y2="480" stroke="#f87171" stroke-width="2.5" marker-end="url(#arrow-green)"/>
+  <rect x="100" y="360" width="60" height="16" fill="#ffffff" opacity="0.95" rx="2"/>
+  <text x="130" y="372" class="label" text-anchor="middle" font-size="9">metadata</text>
+
+  <!-- MLflow to MLflow Postgres -->
+  <line x1="390" y1="240" x2="390" y2="480" stroke="#f87171" stroke-width="2.5" marker-end="url(#arrow-green)"/>
+  <rect x="360" y="355" width="60" height="16" fill="#ffffff" opacity="0.95" rx="2"/>
+  <text x="390" y="367" class="label" text-anchor="middle" font-size="9">tracking</text>
+
+  <!-- FastAPI to MLflow -->
+  <line x1="430" y1="250" x2="450" y2="165" stroke="#06b6d4" stroke-width="2.5" stroke-dasharray="3,3" marker-end="url(#arrow-blue)"/>
+  <rect x="425" y="200" width="50" height="16" fill="#ffffff" opacity="0.95" rx="2"/>
+  <text x="450" y="212" class="label" text-anchor="middle" font-size="9">load model</text>
+
+  <!-- Services to Data Volumes -->
+  <line x1="290" y1="185" x2="620" y2="230" stroke="#2563eb" stroke-width="2" stroke-dasharray="4,2" marker-end="url(#arrow-blue)"/>
+  <text x="445" y="200" class="label" fill="#2563eb" font-size="9">reads/writes</text>
+
+  <!-- Legend Section -->
+  <rect x="50" y="670" width="1090" height="130" fill="none" stroke="#d1d5db" stroke-width="1" rx="4"/>
+  <text x="70" y="690" class="subtitle" font-weight="bold" fill="#374151">Connection Types &amp; Deployment Notes</text>
+
+  <circle cx="80" cy="715" r="4" fill="#2563eb"/>
+  <text x="95" y="720" class="label" fill="#6b7280">Solid arrow = Primary data path</text>
+  <text x="350" y="720" class="label" fill="#6b7280">Dashed arrow = Control flow (events)</text>
+
+  <text x="70" y="745" class="label" fill="#059669" font-weight="600">✓ All 7 services healthcheck enabled</text>
+  <text x="370" y="745" class="label" fill="#059669" font-weight="600">✓ Network: Docker bridge (default)</text>
+
+  <text x="70" y="765" class="label" fill="#6b7280">Service-to-service: container DNS (service name)</text>
+  <text x="450" y="765" class="label" fill="#6b7280">Host access: localhost:{port}</text>
+
+  <text x="70" y="785" class="label" fill="#6b7280">Run: docker-compose up -d</text>
+  <text x="350" y="785" class="label" fill="#6b7280">Check: docker-compose ps</text>
+  <text x="700" y="785" class="label" fill="#6b7280">Logs: docker logs {service}</text>
+
+</svg>

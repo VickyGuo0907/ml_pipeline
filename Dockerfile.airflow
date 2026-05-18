@@ -1,0 +1,31 @@
+FROM apache/airflow:2.10.0-python3.11
+
+USER root
+
+# Install build tools and system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    curl \
+    git \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+USER airflow
+
+# Install core ML pipeline dependencies
+RUN pip install --no-cache-dir \
+    mlflow \
+    pandas \
+    numpy \
+    scikit-learn \
+    lightgbm \
+    pandera[io] \
+    evidently \
+    pydantic \
+    pydantic-settings \
+    pyyaml \
+    python-dotenv \
+    requests \
+    dvc[s3]
+
+# ydata-profiling has complex dependencies; install with retries
+RUN pip install --no-cache-dir ydata-profiling || true
