@@ -168,18 +168,23 @@ with DAG(
         run_id = context["task_instance"].xcom_pull(
             task_ids="01_ingest_files", key="run_id"
         )
+        print(f"[DEBUG] Starting training with run_id={run_id}")
         result = train_models(
             features_dir="data/features",
             run_id=run_id,
             config_dir="config",
             mlflow_tracking_uri="http://mlflow-server:5000",
         )
+        print(f"[DEBUG] Training result: {result}")
+
         # Store run IDs for registration
         run_ids = {
             name: info["mlflow_run_id"]
             for name, info in result["models"].items()
         }
+        print(f"[DEBUG] Extracted run_ids: {run_ids}")
         context["task_instance"].xcom_push(key="mlflow_run_ids", value=run_ids)
+        print(f"[DEBUG] Pushed run_ids to xcom")
         return result
 
     train_linear_task = PythonOperator(
