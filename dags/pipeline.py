@@ -189,6 +189,7 @@ with DAG(
         task_id="07_train_models",
         python_callable=train_wrapper,
         provide_context=True,
+        retries=0,
         doc="Train sklearn linear regression and LightGBM with MLflow autolog",
     )
 
