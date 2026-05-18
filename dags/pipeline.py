@@ -3,12 +3,15 @@
 Orchestrates: ingest → validate → profile → clean → feature_engineer →
 validate_features → train → evaluate/register → drift_report
 """
+import logging
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path
 
 from airflow import DAG
 from airflow.operators.python import PythonOperator
+
+logger = logging.getLogger(__name__)
 
 # Add airflow working directory to Python path
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -168,24 +171,28 @@ with DAG(
         run_id = context["task_instance"].xcom_pull(
             task_ids="01_ingest_files", key="run_id"
         )
-        print(f"[DEBUG] Starting training with run_id={run_id}")
-        result = train_models(
-            features_dir="data/features",
-            run_id=run_id,
-            config_dir="config",
-            mlflow_tracking_uri="http://mlflow-server:5000",
-        )
-        print(f"[DEBUG] Training result: {result}")
+        logger.info(f"Starting training with run_id={run_id}")
+        try:
+            result = train_models(
+                features_dir="data/features",
+                run_id=run_id,
+                config_dir="config",
+                mlflow_tracking_uri="http://mlflow-server:5000",
+            )
+            logger.info(f"Training completed. Result: {result}")
 
-        # Store run IDs for registration
-        run_ids = {
-            name: info["mlflow_run_id"]
-            for name, info in result["models"].items()
-        }
-        print(f"[DEBUG] Extracted run_ids: {run_ids}")
-        context["task_instance"].xcom_push(key="mlflow_run_ids", value=run_ids)
-        print(f"[DEBUG] Pushed run_ids to xcom")
-        return result
+            # Store run IDs for registration
+            run_ids = {
+                name: info["mlflow_run_id"]
+                for name, info in result["models"].items()
+            }
+            logger.info(f"Extracted run_ids: {run_ids}")
+            context["task_instance"].xcom_push(key="mlflow_run_ids", value=run_ids)
+            logger.info("Pushed run_ids to xcom successfully")
+            return result
+        except Exception as e:
+            logger.error(f"Error in train_wrapper: {e}", exc_info=True)
+            raise
 
     train_linear_task = PythonOperator(
         task_id="07_train_models",
