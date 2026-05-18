@@ -171,28 +171,19 @@ with DAG(
         run_id = context["task_instance"].xcom_pull(
             task_ids="01_ingest_files", key="run_id"
         )
-        logger.info(f"Starting training with run_id={run_id}")
-        try:
-            result = train_models(
-                features_dir="data/features",
-                run_id=run_id,
-                config_dir="config",
-                mlflow_tracking_uri="http://mlflow-server:5000",
-            )
-            logger.info(f"Training completed. Result: {result}")
-
-            # Store run IDs for registration
-            run_ids = {
-                name: info["mlflow_run_id"]
-                for name, info in result["models"].items()
-            }
-            logger.info(f"Extracted run_ids: {run_ids}")
-            context["task_instance"].xcom_push(key="mlflow_run_ids", value=run_ids)
-            logger.info("Pushed run_ids to xcom successfully")
-            return result
-        except Exception as e:
-            logger.error(f"Error in train_wrapper: {e}", exc_info=True)
-            raise
+        result = train_models(
+            features_dir="data/features",
+            run_id=run_id,
+            config_dir="config",
+            mlflow_tracking_uri="http://mlflow-server:5000",
+        )
+        # Store run IDs for registration
+        run_ids = {
+            name: info["mlflow_run_id"]
+            for name, info in result["models"].items()
+        }
+        context["task_instance"].xcom_push(key="mlflow_run_ids", value=run_ids)
+        return result
 
     train_linear_task = PythonOperator(
         task_id="07_train_models",
