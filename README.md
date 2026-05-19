@@ -93,10 +93,13 @@ mlflow-artifacts/
 
 All config in `config/` directory, validated via Pydantic models:
 
+- `orchestration.yaml` — DAG parameters (schedule, owner, retries, directories, MLflow URI)
 - `pipeline.yaml` — Sources, target, problem type, split ratio
 - `cleaning.yaml` — Data cleaning recipes (type coercion, missing handling, dedup)
 - `features.yaml` — Feature engineering (encoding, polynomial features, scaling)
 - `models.yaml` — Model hyperparameters (linear, LightGBM)
+
+**Key Feature:** All DAG orchestration settings are in `orchestration.yaml` - change MLflow URI, directories, or schedule without touching Python code.
 
 ### Testing
 
@@ -123,6 +126,32 @@ The TESTING.md guide covers:
 - Testing FastAPI `/health` and `/predict` endpoints
 - Batch prediction validation
 - Troubleshooting common issues
+
+### Debugging & Diagnostics
+
+**For step-by-step pipeline debugging guide, see [DIAGNOSTICS.md](DIAGNOSTICS.md).**
+
+Quick diagnostic check:
+```bash
+# Run comprehensive diagnostics
+python3 scripts/diagnose_pipeline.py
+
+# Analyze model performance
+python3 scripts/analyze_models.py
+
+# Or in Docker environment
+docker-compose exec airflow-scheduler python3 /path/to/script.py
+```
+
+The DIAGNOSTICS.md guide covers:
+- Understanding baseline vs model performance
+- Debugging each of 9 pipeline stages
+- Data quality checks at each step
+- Model performance interpretation (RMSE, improvement %)
+- Feature engineering validation
+- Configuration debugging
+- MLflow integration troubleshooting
+- Red flags and common issues
 
 ### Development
 
