@@ -8,12 +8,8 @@ try:
     from evidently.report import Report
     from evidently.metrics import DatasetDriftMetric
 except ImportError:
-    # Fallback for different evidently versions
-    try:
-        from evidently import Report
-    except ImportError:
-        Report = None
-        DatasetDriftMetric = None
+    Report = None
+    DatasetDriftMetric = None
 
 
 def generate_drift_report(

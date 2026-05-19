@@ -218,6 +218,8 @@ with DAG(
         run_id = context["task_instance"].xcom_pull(
             task_ids="01_ingest_files", key="run_id"
         )
+        if not run_id:
+            raise ValueError("run_id not found in xcom from ingest task")
         result = generate_drift_report(
             features_dir="data/features",
             run_id=run_id,
