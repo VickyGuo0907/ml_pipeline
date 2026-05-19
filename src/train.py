@@ -96,11 +96,15 @@ def train_models(
             mlflow.log_metric("train_rmse", train_rmse)
             mlflow.log_metric("test_rmse", test_rmse)
 
-            # Log model
-            if model_type == "linear":
-                mlflow.sklearn.log_model(model, "model")
-            elif model_type == "gbm":
-                mlflow.lightgbm.log_model(model, "model")
+            # Log model - handle gracefully if API endpoint not available
+            try:
+                if model_type == "linear":
+                    mlflow.sklearn.log_model(model, artifact_path="model")
+                elif model_type == "gbm":
+                    mlflow.lightgbm.log_model(model, artifact_path="model")
+            except Exception as model_log_error:
+                print(f"Warning: Could not log model to MLflow: {model_log_error}")
+                # Continue anyway - metrics are already logged
 
             run_id_mlflow = mlflow.active_run().info.run_id
 
