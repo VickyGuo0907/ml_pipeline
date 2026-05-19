@@ -1,7 +1,10 @@
 """Model evaluation and registration to MLflow."""
+import logging
 from typing import Any
 
 import mlflow
+
+logger = logging.getLogger(__name__)
 
 
 def register_models_to_mlflow(
@@ -60,6 +63,7 @@ def register_models_to_mlflow(
                 "model_uri": model_uri,
             }
         except Exception as e:
+            logger.error(f"Failed to register {model_name}: {e}")
             registration_results["registered_models"][model_name] = {
                 "error": str(e),
                 "source_run_id": run_id,

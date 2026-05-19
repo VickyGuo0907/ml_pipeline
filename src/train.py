@@ -1,4 +1,5 @@
 """Model training stage with MLflow autologging."""
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -10,6 +11,8 @@ from lightgbm import LGBMRegressor
 from sklearn.linear_model import Ridge
 
 from src.utils.config import load_models_config, load_pipeline_config
+
+logger = logging.getLogger(__name__)
 
 
 def train_models(
@@ -103,8 +106,7 @@ def train_models(
                 elif model_type == "gbm":
                     mlflow.lightgbm.log_model(model, artifact_path="model")
             except Exception as model_log_error:
-                print(f"Warning: Could not log model to MLflow: {model_log_error}")
-                # Continue anyway - metrics are already logged
+                logger.warning(f"Could not log {model_name} to MLflow: {model_log_error}")
 
             run_id_mlflow = mlflow.active_run().info.run_id
 
