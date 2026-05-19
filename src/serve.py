@@ -1,8 +1,10 @@
 """FastAPI serving endpoint for ML model predictions."""
+import logging
 import os
 from typing import Optional
-import logging
+
 import mlflow
+import pandas as pd
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
@@ -11,7 +13,7 @@ logger = logging.getLogger(__name__)
 app = FastAPI(title="ML Pipeline Server")
 
 # MLflow tracking URI from environment or default
-MLFLOW_TRACKING_URI = os.environ.get("MLFLOW_TRACKING_URI", "http://localhost:5001")
+MLFLOW_TRACKING_URI = os.environ.get("MLFLOW_TRACKING_URI", "http://mlflow-server:5000")
 mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
 
 # Global model cache
@@ -22,13 +24,12 @@ def load_production_model():
     """Load Production model from MLflow registry."""
     try:
         client = mlflow.tracking.MlflowClient(tracking_uri=MLFLOW_TRACKING_URI)
-        # Get latest Production version of any registered model
-        for model in client.search_registered_models():
-            for version in model.latest_versions:
+        for registered_model in client.search_registered_models():
+            for version in registered_model.latest_versions:
                 if version.current_stage == "Production":
-                    model_uri = f"models:/{model.name}/Production"
+                    model_uri = f"models:/{registered_model.name}/Production"
                     model = mlflow.pyfunc.load_model(model_uri)
-                    logger.info(f"Loaded Production model: {model.name}")
+                    logger.info(f"Loaded Production model: {registered_model.name}")
                     return model
         logger.warning("No Production model found in registry")
         return None
@@ -164,7 +165,6 @@ async def predict(data: PredictionInput) -> PredictionOutput:
             feature_dict["HCAHPS_Cleanliness_Communication"] = input_dict["hcahps_cleanliness_communication"]
 
         # Make prediction
-        import pandas as pd
         input_df = pd.DataFrame([feature_dict])
         prediction = _model_cache["model"].predict(input_df)
 

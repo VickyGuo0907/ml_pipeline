@@ -3,15 +3,12 @@
 Orchestrates: ingest → validate → profile → clean → feature_engineer →
 validate_features → train → evaluate/register → drift_report
 """
-import logging
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path
 
 from airflow import DAG
 from airflow.operators.python import PythonOperator
-
-logger = logging.getLogger(__name__)
 
 # Add airflow working directory to Python path
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -190,7 +187,7 @@ with DAG(
         python_callable=train_wrapper,
         provide_context=True,
         retries=0,
-        doc="Train sklearn linear regression and LightGBM with MLflow autolog",
+        doc="Train sklearn linear regression and LightGBM, log metrics to MLflow",
     )
 
     # Stage 8: Register Models

@@ -32,7 +32,7 @@ End-to-end machine learning pipeline demonstrating orchestration, validation, tr
    - Airflow Webserver (8080)
    - Airflow Scheduler
    - Airflow Triggerer
-   - MLflow Server (5001)
+   - MLflow Server (5000)
    - FastAPI Server (8000)
 
 4. **Install dependencies:**
@@ -45,7 +45,7 @@ End-to-end machine learning pipeline demonstrating orchestration, validation, tr
 | Service | URL | Login |
 |---------|-----|-------|
 | Airflow | http://localhost:8080 | airflow / airflow |
-| MLflow | http://localhost:5001 | N/A |
+| MLflow | http://localhost:5000 | N/A |
 | FastAPI | http://localhost:8000/docs | N/A |
 
 ## Pipeline Architecture
@@ -58,8 +58,8 @@ End-to-end machine learning pipeline demonstrating orchestration, validation, tr
 4. **clean** — Type coercion, missing value handling, deduplication → `data/interim/<run_id>`
 5. **feature_engineer** — Joins, encoding, NZV filtering, train/test split → `data/features/<run_id>`
 6. **validate_features** — Pandera schema check on feature matrix
-7. **train** — sklearn linear + LightGBM models with MLflow autolog
-8. **evaluate_register** — Compute metrics, register both models to MLflow Staging
+7. **train** — sklearn linear + LightGBM models, log metrics to MLflow
+8. **register** — Register both models to MLflow Staging (no auto-promotion)
 9. **drift_report** — Evidently AI drift monitoring (current vs previous training set)
 
 ### Data Flow

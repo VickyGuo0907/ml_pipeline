@@ -21,7 +21,7 @@ def train_models(
     config_dir: str | Path = "config",
     mlflow_tracking_uri: str = "http://mlflow-server:5000",
 ) -> dict[str, Any]:
-    """Train models (linear + LightGBM) with MLflow autolog.
+    """Train models (linear + LightGBM) and log metrics to MLflow.
 
     Args:
         features_dir: Directory containing feature matrices
