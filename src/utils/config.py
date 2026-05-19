@@ -112,6 +112,58 @@ class ModelsConfig(BaseModel):
     train_test_split: float = Field(default=0.8, ge=0.0, le=1.0)
 
 
+class OrchestrationDAGConfig(BaseModel):
+    """DAG-level orchestration settings."""
+
+    dag_id: str = Field(default="ml_pipeline", description="DAG identifier")
+    owner: str = Field(default="data-eng", description="DAG owner")
+    description: str = Field(
+        default="End-to-end ML pipeline: ingest → train → serve",
+        description="DAG description",
+    )
+    schedule_interval: str = Field(default="@weekly", description="Schedule interval")
+    catchup: bool = Field(default=False, description="Enable catchup")
+    tags: list[str] = Field(default_factory=lambda: ["ml", "production"], description="DAG tags")
+
+
+class OrchestrationTaskConfig(BaseModel):
+    """Task-level orchestration settings."""
+
+    retries: int = Field(default=1, description="Default task retries")
+    retry_delay_minutes: int = Field(default=5, description="Retry delay in minutes")
+    train_models_retries: int = Field(default=0, description="Train models task retries")
+
+
+class OrchestrationDirectoriesConfig(BaseModel):
+    """Data directories configuration."""
+
+    landing: str = Field(default="data/landing", description="Landing directory")
+    raw: str = Field(default="data/raw", description="Raw data directory")
+    interim: str = Field(default="data/interim", description="Interim data directory")
+    features: str = Field(default="data/features", description="Features directory")
+    reports: str = Field(default="reports", description="Reports directory")
+    config: str = Field(default="config", description="Configuration directory")
+
+
+class OrchestrationMLflowConfig(BaseModel):
+    """MLflow configuration."""
+
+    tracking_uri: str = Field(
+        default="http://mlflow-server:5000", description="MLflow tracking server URI"
+    )
+
+
+class OrchestrationConfig(BaseModel):
+    """Complete orchestration configuration for Airflow DAG."""
+
+    dag: OrchestrationDAGConfig = Field(default_factory=OrchestrationDAGConfig)
+    tasks: OrchestrationTaskConfig = Field(default_factory=OrchestrationTaskConfig)
+    directories: OrchestrationDirectoriesConfig = Field(
+        default_factory=OrchestrationDirectoriesConfig
+    )
+    mlflow: OrchestrationMLflowConfig = Field(default_factory=OrchestrationMLflowConfig)
+
+
 def load_config(config_path: str | Path) -> dict[str, Any]:
     """Load YAML configuration file.
 
@@ -183,3 +235,19 @@ def load_models_config(config_dir: str | Path = "config") -> ModelsConfig:
     config_path = Path(config_dir) / "models.yaml"
     config_data = load_config(config_path)
     return ModelsConfig(**config_data)
+
+
+def load_orchestration_config(config_dir: str | Path = "config") -> OrchestrationConfig:
+    """Load and validate orchestration configuration.
+
+    Args:
+        config_dir: Directory containing config files
+
+    Returns:
+        Validated OrchestrationConfig
+    """
+    config_path = Path(config_dir) / "orchestration.yaml"
+    if not config_path.exists():
+        return OrchestrationConfig()
+    config_data = load_config(config_path)
+    return OrchestrationConfig(**config_data)

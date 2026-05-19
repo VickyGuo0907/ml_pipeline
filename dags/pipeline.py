@@ -20,13 +20,17 @@ from src.ingest import ingest_files
 from src.monitoring import generate_drift_report
 from src.profile import profile_raw_files
 from src.train import train_models
+from src.utils import load_orchestration_config
 from src.validate import validate_raw_files
 
-# Default arguments
+# Load orchestration configuration
+config = load_orchestration_config("config")
+
+# Build default arguments from config
 default_args = {
-    "owner": "data-eng",
-    "retries": 1,
-    "retry_delay": timedelta(minutes=5),
+    "owner": config.dag.owner,
+    "retries": config.tasks.retries,
+    "retry_delay": timedelta(minutes=config.tasks.retry_delay_minutes),
     "start_date": datetime(2026, 1, 1),
     "email_on_failure": False,
     "email_on_retry": False,
@@ -34,20 +38,20 @@ default_args = {
 
 # DAG definition
 with DAG(
-    "ml_pipeline",
+    config.dag.dag_id,
     default_args=default_args,
-    description="End-to-end ML pipeline: ingest → train → serve",
-    schedule_interval="@weekly",
-    catchup=False,
-    tags=["ml", "production"],
+    description=config.dag.description,
+    schedule_interval=config.dag.schedule_interval,
+    catchup=config.dag.catchup,
+    tags=config.dag.tags,
 ) as dag:
 
     # Stage 1: Ingest
     def ingest_wrapper(**context):
         """Ingest data and pass run_id downstream."""
         result = ingest_files(
-            landing_dir="data/landing",
-            raw_dir="data/raw",
+            landing_dir=config.directories.landing,
+            raw_dir=config.directories.raw,
             run_id=context["ds"],  # Use Airflow logical date as run_id
         )
         context["task_instance"].xcom_push(key="run_id", value=result["run_id"])
@@ -67,7 +71,7 @@ with DAG(
             task_ids="01_ingest_files", key="run_id"
         )
         result = validate_raw_files(
-            raw_dir="data/raw",
+            raw_dir=config.directories.raw,
             run_id=run_id,
         )
         return result
@@ -86,9 +90,9 @@ with DAG(
             task_ids="01_ingest_files", key="run_id"
         )
         result = profile_raw_files(
-            raw_dir="data/raw",
+            raw_dir=config.directories.raw,
             run_id=run_id,
-            reports_dir="reports",
+            reports_dir=config.directories.reports,
         )
         return result
 
@@ -106,8 +110,8 @@ with DAG(
             task_ids="01_ingest_files", key="run_id"
         )
         result = clean_raw_data(
-            raw_dir="data/raw",
-            interim_dir="data/interim",
+            raw_dir=config.directories.raw,
+            interim_dir=config.directories.interim,
             run_id=run_id,
         )
         return result
@@ -126,10 +130,10 @@ with DAG(
             task_ids="01_ingest_files", key="run_id"
         )
         result = engineer_features(
-            interim_dir="data/interim",
-            features_dir="data/features",
+            interim_dir=config.directories.interim,
+            features_dir=config.directories.features,
             run_id=run_id,
-            config_dir="config",
+            config_dir=config.directories.config,
         )
         return result
 
@@ -150,7 +154,7 @@ with DAG(
         from src.schemas.features import features_schema
         import pandas as pd
 
-        features_path = f"data/features/{run_id}"
+        features_path = f"{config.directories.features}/{run_id}"
         train_df = pd.read_parquet(f"{features_path}/train.parquet")
         features_schema.validate(train_df)
         return {"validated_rows": len(train_df)}
@@ -169,10 +173,10 @@ with DAG(
             task_ids="01_ingest_files", key="run_id"
         )
         result = train_models(
-            features_dir="data/features",
+            features_dir=config.directories.features,
             run_id=run_id,
-            config_dir="config",
-            mlflow_tracking_uri="http://mlflow-server:5000",
+            config_dir=config.directories.config,
+            mlflow_tracking_uri=config.mlflow.tracking_uri,
         )
         # Store run IDs for registration
         run_ids = {
@@ -186,7 +190,7 @@ with DAG(
         task_id="07_train_models",
         python_callable=train_wrapper,
         provide_context=True,
-        retries=0,
+        retries=config.tasks.train_models_retries,
         doc="Train sklearn linear regression and LightGBM, log metrics to MLflow",
     )
 
@@ -197,7 +201,7 @@ with DAG(
             task_ids="07_train_models", key="mlflow_run_ids"
         )
         result = register_models_to_mlflow(
-            mlflow_tracking_uri="http://mlflow-server:5000",
+            mlflow_tracking_uri=config.mlflow.tracking_uri,
             mlflow_run_ids=mlflow_run_ids,
         )
         return result
@@ -218,10 +222,10 @@ with DAG(
         if not run_id:
             raise ValueError("run_id not found in xcom from ingest task")
         result = generate_drift_report(
-            features_dir="data/features",
+            features_dir=config.directories.features,
             run_id=run_id,
             previous_run_id=None,  # Can be updated to compare with previous runs
-            reports_dir="reports",
+            reports_dir=config.directories.reports,
         )
         return result
 
