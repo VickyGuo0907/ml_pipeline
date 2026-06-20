@@ -1,0 +1,62 @@
+# Healthcare pipeline model config
+# SVG Stage 3b + Stage 4: Supervised model comparison
+#
+# Model ladder (matches SVG):
+#   OLS baseline → Elastic Net → Ridge (multicollinearity) → LASSO (selection) → RF (non-linearity)
+#   + LightGBM (production-grade boosting, not in SVG but kept as best performer)
+
+random_state: 42
+train_test_split: 0.81
+
+models:
+  # SVG Stage 3b: OLS baseline (pure linear, no regularization)
+  - name: "ols_baseline"
+    type: "ols"
+    hyperparameters: {}
+
+  # SVG Stage 3b: Elastic Net (caret equivalent — best α=0,λ=0 → collapses to OLS)
+  - name: "elastic_net"
+    type: "elastic_net"
+    hyperparameters:
+      alpha: 0.01
+      l1_ratio: 0.5
+      max_iter: 2000
+
+  # SVG Stage 4: Ridge tests multicollinearity (R²=0.349 in SVG)
+  - name: "ridge_l2"
+    type: "ridge"
+    hyperparameters:
+      alpha: 1.0
+      fit_intercept: true
+
+  # SVG Stage 4: LASSO tests feature selection (R²=0.347, 1 zeroed in SVG)
+  - name: "lasso_l1"
+    type: "lasso"
+    hyperparameters:
+      alpha: 0.01
+      max_iter: 2000
+
+  # SVG Stage 4: Random Forest breaks linear ceiling (R²=0.398, mtry=7 in SVG)
+  - name: "random_forest"
+    type: "random_forest"
+    hyperparameters:
+      n_estimators: 100
+      max_features: 7
+      random_state: 42
+      n_jobs: -1
+
+  # LightGBM — production-grade, not in SVG but kept as best performer
+  - name: "lightgbm_gbm"
+    type: "gbm"
+    hyperparameters:
+      n_estimators: 100
+      learning_rate: 0.05
+      max_depth: 7
+      num_leaves: 31
+      min_child_samples: 20
+      subsample: 0.8
+      colsample_bytree: 0.8
+      reg_alpha: 0.0
+      reg_lambda: 1.0
+      random_state: 42
+      n_jobs: -1

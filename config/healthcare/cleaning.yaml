@@ -1,0 +1,36 @@
+# Healthcare pipeline cleaning config
+# SVG Stage 1: Data Cleaning & Preparation
+
+# Use MICE (sklearn IterativeImputer) — Python equivalent of R's missForest
+# Options: median | iterative | knn
+impute_strategy: "iterative"
+
+# Drop columns whose imputed values are unreliable.
+# SVG Stage 1: "Drop bad imputations — Payment, ED volume"
+# Patterns matched against column names (case-insensitive substring)
+drop_column_patterns:
+  - "Payment"
+  - "Emergency Department"
+  - "ED Volume"
+
+# Columns to check for exact duplicates (null = check all)
+duplicates_subset: null
+
+steps:
+  - name: "type_coercion"
+    type: "coerce_types"
+    columns: null
+    params:
+      force_numeric: false
+
+  - name: "impute_missing"
+    type: "impute"
+    columns: null
+    params:
+      threshold: 0.5  # Drop columns with >50% missing before imputing
+
+  - name: "remove_duplicates"
+    type: "deduplicate"
+    columns: null
+    params:
+      keep: "first"

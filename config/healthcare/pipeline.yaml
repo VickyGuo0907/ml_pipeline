@@ -1,0 +1,22 @@
+# CMS Healthcare Readmission Pipeline
+# Workflow: Raw CMS Hospital Compare → Readmission prediction
+# Reference: health_care_ml_pipeline.svg
+
+pipeline_type: healthcare_readmission
+
+sources:
+  - name: "hospital_compare_pneumonia"
+    path: "data/landing"
+    format: "csv"
+
+# Actual CMS column name (with spaces, as it appears in raw CSV)
+target:
+  name: "Excess Readmission Ratio"
+  type: "continuous"
+
+problem_type: "regression"
+
+# 81/19 split per SVG Stage 1 (2,210 train / 516 test)
+train_test_split: 0.81
+
+random_state: 42

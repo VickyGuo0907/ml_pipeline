@@ -1,1 +1,35 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Environments
+.env
+.venv
+venv/
+.python-version
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# Data outputs (versioned by run_id, not committed)
+data/raw/*/
+data/interim/*/
+data/features/*/
 .data/
+
+# ML artifacts
+mlflow-artifacts/
+reports/
+
+# OS
+.DS_Store
+Thumbs.db

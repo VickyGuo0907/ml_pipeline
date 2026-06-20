@@ -1,0 +1,40 @@
+# Healthcare pipeline feature engineering config
+# SVG Stage 2: Transformation, Scaling & Feature Reduction
+
+# Column encoding strategies
+# SVG: "Freq encode State — 52 levels → numeric"
+# Options per column: frequency | label | one_hot | ordinal
+encoding:
+  "State": "frequency"
+  "Facility Name": "label"
+  "Measure Name": "label"
+
+steps:
+  - name: "encode_categorical"
+    type: "encode"
+    source_columns: ["Facility Name", "State", "Measure Name"]
+    operation: "encode"
+    params:
+      handle_unknown: "use_encoded_value"
+      unknown_value: -1
+
+# SVG Stage 2: "Box-Cox transform — λ = -0.3 on target"
+# Fitted on the full dataset before train/test split
+boxcox_target: true
+
+# SVG Stage 2: "VIF cleanup — Drop 5 HCAHPS > 5"
+# Iteratively drops the highest-VIF predictor until all VIF ≤ threshold
+# Set to null to disable VIF filtering
+vif_threshold: 5.0
+
+# Near-zero variance filtering (remove features where 95%+ values are the same)
+nzv_threshold: 0.95
+
+# Columns to drop after encoding
+drop_columns:
+  - "Footnote"
+  - "Start Date"
+  - "End Date"
+
+# Standardize all numeric features (SVG Stage 2: "Center & scale")
+scale: true
