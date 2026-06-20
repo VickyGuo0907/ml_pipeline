@@ -33,3 +33,7 @@ reports/
 # OS
 .DS_Store
 Thumbs.db
+
+# Test / IDE caches
+.pytest_cache/
+.jbeval/
