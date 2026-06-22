@@ -91,6 +91,9 @@ class TestIngest:
             assert len(hash1) == 64  # SHA256 hex is 64 chars
 
 
+HEALTHCARE_CONFIG = "config/healthcare"
+
+
 class TestClean:
     """Tests for data cleaning."""
 
@@ -104,7 +107,6 @@ class TestClean:
 
             run_id = "2026-05-18"
 
-            # Create data with >50% missing column
             df = pd.DataFrame({
                 "col1": [1, 2, 3, 4, 5],
                 "col2": [None, None, None, 4, 5],  # 60% missing
@@ -113,13 +115,12 @@ class TestClean:
             csv_path.mkdir(parents=True)
             df.to_csv(csv_path / "test.csv", index=False)
 
-            # Create manifest
             import yaml
             manifest = {"files": {"test.csv": {}}}
             with open(csv_path / "manifest.yaml", "w") as f:
                 yaml.dump(manifest, f)
 
-            result = clean_raw_data(raw_dir, interim_dir, run_id)
+            result = clean_raw_data(raw_dir, interim_dir, run_id, config_dir=HEALTHCARE_CONFIG)
 
             assert "test.csv" in result["files"]
             assert result["files"]["test.csv"]["cols_removed"] > 0
@@ -134,7 +135,6 @@ class TestClean:
 
             run_id = "2026-05-18"
 
-            # Create data with duplicates
             df = pd.DataFrame({
                 "col1": [1, 1, 2, 3],
                 "col2": ["a", "a", "b", "c"],
@@ -143,13 +143,12 @@ class TestClean:
             csv_path.mkdir(parents=True)
             df.to_csv(csv_path / "test.csv", index=False)
 
-            # Create manifest
             import yaml
             manifest = {"files": {"test.csv": {}}}
             with open(csv_path / "manifest.yaml", "w") as f:
                 yaml.dump(manifest, f)
 
-            result = clean_raw_data(raw_dir, interim_dir, run_id)
+            result = clean_raw_data(raw_dir, interim_dir, run_id, config_dir=HEALTHCARE_CONFIG)
 
             assert result["files"]["test.csv"]["rows_removed"] > 0
 
@@ -239,7 +238,6 @@ class TestIntegration:
 
             landing_dir.mkdir()
 
-            # Create test data
             df = pd.DataFrame({
                 "FacilityId": [1, 2, 3],
                 "State": ["NY", "CA", "TX"],
@@ -249,14 +247,8 @@ class TestIntegration:
 
             run_id = "2026-05-18"
 
-            # Ingest
             ingest_result = ingest_files(landing_dir, raw_dir, run_id)
             assert ingest_result["file_count"] == 1
 
-            # Validate (will pass with our test data)
-            # validate_result = validate_raw_files(raw_dir, run_id)
-            # assert len(validate_result["validated_files"]) == 1
-
-            # Clean
-            clean_result = clean_raw_data(raw_dir, interim_dir, run_id)
+            clean_result = clean_raw_data(raw_dir, interim_dir, run_id, config_dir=HEALTHCARE_CONFIG)
             assert "hospital_data.csv" in clean_result["files"]

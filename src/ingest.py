@@ -1,8 +1,7 @@
 """Data ingestion stage: move files from landing to raw with versioning."""
 import hashlib
-import json
 import shutil
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -56,7 +55,7 @@ def ingest_files(
 
     # Default run_id to ISO timestamp if not provided
     if run_id is None:
-        run_id = datetime.utcnow().strftime("%Y-%m-%d")
+        run_id = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
     # Create versioned raw directory
     raw_run_dir = raw_path / run_id
@@ -70,7 +69,7 @@ def ingest_files(
     # Build manifest with file metadata
     manifest = {
         "run_id": run_id,
-        "timestamp": datetime.utcnow().isoformat(),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
         "source_directory": str(landing_path),
         "files": {},
     }
@@ -89,7 +88,7 @@ def ingest_files(
         manifest["files"][csv_file.name] = {
             "size_bytes": file_size,
             "hash_sha256": file_hash,
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
         }
 
     # Write manifest.yaml

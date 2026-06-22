@@ -48,20 +48,17 @@ class TestRawSchema:
     def test_raw_data_missing_required_column(self):
         """Test that missing required columns raise validation error."""
         df = pd.DataFrame({
-            "Facility Name": ["Hospital A", "Hospital B"],
+            # "Facility Name" is required by the schema — omitting it must fail
             "State": ["NY", "CA"],
-            # Missing Facility ID (required)
         })
         with pytest.raises(SchemaError):
             raw_schema.validate(df)
 
-    def test_raw_data_invalid_facility_id_type(self):
-        """Test that non-integer Facility ID values are caught."""
+    def test_raw_data_null_in_required_column(self):
+        """Test that null values in non-nullable columns raise validation error."""
         df = pd.DataFrame({
-            "Facility ID": ["not_a_number", 2],  # Non-integer
-            "Facility Name": ["Hospital A", "Hospital B"],
+            "Facility Name": ["Hospital A", None],  # nullable=False
             "State": ["NY", "CA"],
-            "Excess Readmission Ratio": [0.95, 1.05],
         })
         with pytest.raises(SchemaError):
             raw_schema.validate(df)

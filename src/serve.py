@@ -1,47 +1,49 @@
 """FastAPI serving endpoint for ML model predictions."""
 import logging
 import os
+from contextlib import asynccontextmanager
 from typing import Optional
 
 import mlflow
 import pandas as pd
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="ML Pipeline Server")
-
-# MLflow tracking URI from environment or default
 MLFLOW_TRACKING_URI = os.environ.get("MLFLOW_TRACKING_URI", "http://mlflow-server:5000")
-mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
 
 # Global model cache
-_model_cache = {"model": None, "model_name": None}
+_model_cache: dict = {"model": None}
 
 
-def load_production_model():
+def load_production_model() -> object | None:
     """Load Production model from MLflow registry."""
     try:
+        mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
         client = mlflow.tracking.MlflowClient(tracking_uri=MLFLOW_TRACKING_URI)
         for registered_model in client.search_registered_models():
             for version in registered_model.latest_versions:
                 if version.current_stage == "Production":
                     model_uri = f"models:/{registered_model.name}/Production"
                     model = mlflow.pyfunc.load_model(model_uri)
-                    logger.info(f"Loaded Production model: {registered_model.name}")
+                    logger.info("Loaded Production model: %s", registered_model.name)
                     return model
         logger.warning("No Production model found in registry")
         return None
     except Exception as e:
-        logger.error(f"Failed to load Production model: {e}")
+        logger.error("Failed to load Production model: %s", e)
         return None
 
 
-@app.on_event("startup")
-async def startup_event():
-    """Load model on server startup."""
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Load model on startup."""
     _model_cache["model"] = load_production_model()
+    yield
+
+
+app = FastAPI(title="ML Pipeline Server", lifespan=lifespan)
 
 
 class HealthResponse(BaseModel):
@@ -52,6 +54,33 @@ class HealthResponse(BaseModel):
 
 class PredictionInput(BaseModel):
     """Feature input for model prediction."""
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "state_encoded": 1,
+                "facility_id_encoded": 42,
+                "compared_to_national_mortality_below": 1,
+                "compared_to_national_mortality_same": 0,
+                "compared_to_national_mortality_above": 0,
+                "compared_to_national_safety_below": 0,
+                "compared_to_national_safety_same": 1,
+                "compared_to_national_safety_above": 0,
+                "compared_to_national_readmission_below": 0,
+                "compared_to_national_readmission_same": 0,
+                "compared_to_national_readmission_above": 1,
+                "mortality_rate": 12.5,
+                "hcahps_cleanliness": 75.0,
+                "hcahps_communication": 80.0,
+                "hcahps_responsiveness": 70.0,
+                "hcahps_pain_management": 72.0,
+                "hcahps_medication": 68.0,
+                "hcahps_discharge": 74.0,
+                "hcahps_quiet": 71.0,
+                "number_of_beds": 150.0,
+            }
+        }
+    )
+
     state_encoded: int
     facility_id_encoded: int
     compared_to_national_mortality_below: int
@@ -76,35 +105,6 @@ class PredictionInput(BaseModel):
     hcahps_communication_poly2: Optional[float] = None
     hcahps_cleanliness_communication: Optional[float] = None
 
-    class Config:
-        schema_extra = {
-            "example": {
-                "state_encoded": 1,
-                "facility_id_encoded": 42,
-                "compared_to_national_mortality_below": 1,
-                "compared_to_national_mortality_same": 0,
-                "compared_to_national_mortality_above": 0,
-                "compared_to_national_safety_below": 0,
-                "compared_to_national_safety_same": 1,
-                "compared_to_national_safety_above": 0,
-                "compared_to_national_readmission_below": 0,
-                "compared_to_national_readmission_same": 0,
-                "compared_to_national_readmission_above": 1,
-                "mortality_rate": 12.5,
-                "hcahps_cleanliness": 75.0,
-                "hcahps_communication": 80.0,
-                "hcahps_responsiveness": 70.0,
-                "hcahps_pain_management": 72.0,
-                "hcahps_medication": 68.0,
-                "hcahps_discharge": 74.0,
-                "hcahps_quiet": 71.0,
-                "number_of_beds": 150.0,
-                "hcahps_cleanliness_poly2": None,
-                "hcahps_communication_poly2": None,
-                "hcahps_cleanliness_communication": None,
-            }
-        }
-
 
 class PredictionOutput(BaseModel):
     """Model prediction output."""
@@ -117,7 +117,7 @@ async def health() -> HealthResponse:
     """Health check endpoint."""
     return HealthResponse(
         status="healthy",
-        model_loaded=_model_cache["model"] is not None
+        model_loaded=_model_cache["model"] is not None,
     )
 
 
@@ -127,12 +127,11 @@ async def predict(data: PredictionInput) -> PredictionOutput:
     if _model_cache["model"] is None:
         raise HTTPException(
             status_code=503,
-            detail="Model not loaded. Check MLflow registry for Production version."
+            detail="Model not loaded. Check MLflow registry for Production version.",
         )
 
     try:
-        # Convert input to dict and map to feature column names
-        input_dict = data.dict()
+        input_dict = data.model_dump()
         feature_dict = {
             "State_encoded": input_dict["state_encoded"],
             "FacilityId_encoded": input_dict["facility_id_encoded"],
@@ -156,7 +155,6 @@ async def predict(data: PredictionInput) -> PredictionOutput:
             "Number_of_Beds": input_dict["number_of_beds"],
         }
 
-        # Add polynomial features if provided
         if input_dict["hcahps_cleanliness_poly2"] is not None:
             feature_dict["HCAHPS_Cleanliness_poly2"] = input_dict["hcahps_cleanliness_poly2"]
         if input_dict["hcahps_communication_poly2"] is not None:
@@ -164,17 +162,13 @@ async def predict(data: PredictionInput) -> PredictionOutput:
         if input_dict["hcahps_cleanliness_communication"] is not None:
             feature_dict["HCAHPS_Cleanliness_Communication"] = input_dict["hcahps_cleanliness_communication"]
 
-        # Make prediction
         input_df = pd.DataFrame([feature_dict])
         prediction = _model_cache["model"].predict(input_df)
 
         return PredictionOutput(
             prediction=float(prediction[0]),
-            model_version="Production"
+            model_version="Production",
         )
     except Exception as e:
-        logger.error(f"Prediction failed: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Prediction failed: {str(e)}"
-        )
+        logger.error("Prediction failed: %s", e)
+        raise HTTPException(status_code=500, detail=f"Prediction failed: {str(e)}")
