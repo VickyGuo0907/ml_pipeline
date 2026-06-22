@@ -12,8 +12,20 @@ from src.utils.config import (
     load_orchestration_config,
     load_pipeline_config,
 )
+from src.utils.model_registry import MODEL_REGISTRY, get_model, register_model
+from src.utils.transforms import (
+    IMPUTE_REGISTRY,
+    boxcox_transform,
+    compute_vif,
+    drop_high_vif,
+    drop_pattern_columns,
+    frequency_encode,
+    iterative_impute,
+    median_impute,
+)
 
 __all__ = [
+    # Config
     "PipelineConfig",
     "CleaningConfig",
     "FeaturesConfig",
@@ -25,4 +37,17 @@ __all__ = [
     "load_models_config",
     "load_orchestration_config",
     "load_config",
+    # Model registry
+    "MODEL_REGISTRY",
+    "get_model",
+    "register_model",
+    # Transforms
+    "IMPUTE_REGISTRY",
+    "frequency_encode",
+    "boxcox_transform",
+    "compute_vif",
+    "drop_high_vif",
+    "iterative_impute",
+    "median_impute",
+    "drop_pattern_columns",
 ]

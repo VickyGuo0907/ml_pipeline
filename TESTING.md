@@ -13,7 +13,7 @@ docker-compose ps
 
 Access points:
 - **Airflow UI**: http://localhost:8080 (user: `airflow`, password: set via `.env` or default from Docker)
-- **MLflow UI**: http://localhost:5001
+- **MLflow UI**: http://localhost:5000
 - **FastAPI Docs**: http://localhost:8000/docs
 - **FastAPI Health**: http://localhost:8000/health
 
@@ -147,7 +147,7 @@ ls -lh reports/
 
 ### Via MLflow UI
 
-1. Open http://localhost:5001
+1. Open http://localhost:5000
 2. Navigate to **Experiments** → **ml_pipeline** (default experiment)
 3. Should see **2 runs** for the latest DAG execution:
    - Run 1: Linear Baseline (Ridge)
@@ -161,7 +161,7 @@ ls -lh reports/
 
 ```bash
 # Set MLflow tracking URI
-export MLFLOW_TRACKING_URI=http://localhost:5001
+export MLFLOW_TRACKING_URI=http://localhost:5000
 
 # List experiments
 mlflow experiments list
@@ -182,7 +182,7 @@ mlflow artifacts download --run-id <run_id> --dst-path ./artifacts
 
 ### Via MLflow UI (Recommended)
 
-1. **Open MLflow UI**: http://localhost:5001
+1. **Open MLflow UI**: http://localhost:5000
 2. **Navigate to Models** (in left sidebar, may be under "Registered Models")
 3. **Click a run** → **Register model** button
 4. **Name**: e.g., `lightgbm_hospital` or `ridge_baseline`
@@ -194,7 +194,7 @@ mlflow artifacts download --run-id <run_id> --dst-path ./artifacts
 # Inside container
 docker exec airflow-webserver python -c "
 import mlflow
-mlflow.set_tracking_uri('http://localhost:5001')
+mlflow.set_tracking_uri('http://localhost:5000')
 
 # Register a model from a run
 run_id = '<run_id_from_above>'

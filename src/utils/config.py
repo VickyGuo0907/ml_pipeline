@@ -39,6 +39,8 @@ class PipelineConfig(BaseModel):
     problem_type: ProblemType = Field(..., description="ML problem type")
     train_test_split: float = Field(default=0.8, ge=0.0, le=1.0)
     random_state: int = Field(default=42)
+    # Identifies the pipeline variant — used for logging/tagging, not logic branching
+    pipeline_type: str = Field(default="generic", description="Pipeline variant identifier")
 
     @field_validator("sources")
     @classmethod
@@ -62,7 +64,13 @@ class CleaningConfig(BaseModel):
     """Data cleaning configuration."""
 
     steps: list[CleaningStep] = Field(..., description="Cleaning steps in order")
-    missing_strategy: str = Field(default="drop", description="Strategy for missing values")
+    missing_strategy: str = Field(default="drop", description="Legacy: strategy for missing values")
+    # Options: median | iterative (MICE/missForest-like) | knn
+    impute_strategy: str = Field(default="median", description="Imputation strategy")
+    # Column name substrings to drop after imputation (case-insensitive)
+    drop_column_patterns: list[str] = Field(
+        default_factory=list, description="Drop columns whose names contain these substrings"
+    )
     duplicates_subset: Optional[list[str]] = Field(
         default=None, description="Columns to check for duplicates"
     )
@@ -81,7 +89,7 @@ class FeatureEngineeringStep(BaseModel):
 class FeaturesConfig(BaseModel):
     """Feature engineering configuration."""
 
-    encoding:dict[str, str] = Field(
+    encoding: dict[str, str] = Field(
         default_factory=dict, description="Column encoding mapping"
     )
     steps: list[FeatureEngineeringStep] = Field(
@@ -92,6 +100,12 @@ class FeaturesConfig(BaseModel):
     )
     drop_columns: list[str] = Field(default_factory=list, description="Columns to drop")
     scale: bool = Field(default=True, description="Whether to scale features")
+    # SVG Stage 2: apply Box-Cox power transform to target before modeling
+    boxcox_target: bool = Field(default=False, description="Apply Box-Cox transform to target")
+    # SVG Stage 2: drop predictors with VIF > threshold; None disables
+    vif_threshold: Optional[float] = Field(
+        default=None, description="VIF threshold for collinearity pruning; None = disabled"
+    )
 
 
 class ModelConfig(BaseModel):

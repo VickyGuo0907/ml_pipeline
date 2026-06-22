@@ -164,7 +164,7 @@ The DIAGNOSTICS.md guide covers:
 
 #### Monitoring
 
-- **MLflow Tracking:** http://localhost:5001 — browse runs, metrics, artifacts
+- **MLflow Tracking:** http://localhost:5000 — browse runs, metrics, artifacts
 - **Drift Reports:** Check `reports/` directory after `drift_report` task completes
 - **Logs:** `docker logs airflow-scheduler` or Airflow UI task logs
 
@@ -211,7 +211,7 @@ docker-compose restart airflow-webserver
 
 ### MLflow models not visible
 ```bash
-curl http://localhost:5001/health
+curl http://localhost:5000/health
 # If unhealthy, check:
 docker logs mlflow-server
 ```
@@ -235,7 +235,7 @@ uv run pytest tests/ -v  # Full verbose output
    - Test FastAPI `/predict` endpoint with sample data
 3. Monitor in UIs:
    - **Airflow UI**: http://localhost:8080 (DAG progress)
-   - **MLflow UI**: http://localhost:5001 (model metrics & registry)
+   - **MLflow UI**: http://localhost:5000 (model metrics & registry)
    - **FastAPI Docs**: http://localhost:8000/docs (interactive API testing)
 4. Scale and deploy:
    - Move to Kubernetes for production deployment

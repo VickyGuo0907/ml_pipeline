@@ -125,7 +125,7 @@
 │  ┌──────────────────────────────────────┐                       │
 │  │  ML SERVICES                         │                       │
 │  │  ┌────────────────────────────────┐  │                       │
-│  │  │ mlflow-server (:5001)          │  │                       │
+│  │  │ mlflow-server (:5000)          │  │                       │
 │  │  │ • Model registry               │  │                       │
 │  │  │ • Artifact storage             │  │                       │
 │  │  │ • Metrics tracking             │  │                       │
@@ -262,34 +262,43 @@ data/features/2026-05-18/{train,test}.parquet
         ├─→ Train Linear Baseline (Ridge)
         │   ├─ Fit on train
         │   ├─ Predict on test
-        │   ├─ Log metrics (MSE, RMSE)
-        │   └─ MLflow autolog enabled
+        │   ├─ Log metrics (MSE, RMSE, train_rmse, test_rmse)
+        │   └─ Log to MLflow run
         │
         ├─→ Train LightGBM
         │   ├─ Fit on train
         │   ├─ Predict on test
         │   ├─ Log metrics
-        │   └─ MLflow autolog enabled
+        │   └─ Log to MLflow run
         │
-        └─→ Output: MLflow run IDs
+        └─→ Output: MLflow run IDs via XCom
 
 
-STAGE 8: REGISTER
+STAGE 8: REGISTER & EVALUATE
 ───────────────────────────────────────────────────────
 MLflow runs (from train stage)
         │
-        ├─→ Load each model from run
+        ├─→ Extract metrics from runs
+        │   ├─ test_rmse, train_rmse, test_mse
+        │   └─ Calculate baseline RMSE for performance comparison
+        │
         ├─→ Register to Model Registry
         │   ├─ Model: linear_baseline (v1)
         │   └─ Model: lightgbm_gbm (v1)
         │
+        ├─→ Add comprehensive tags to each model
+        │   ├─ Lifecycle: stage (staging), registered_by, registered_at (ISO timestamp)
+        │   ├─ Performance: test_rmse, train_rmse, test_mse (formatted)
+        │   ├─ Metadata: model_type, run_id, environment (development)
+        │   └─ Status: active
+        │
+        ├─→ Update model version with description
+        │   └─ Human-readable: model name, type, RMSE, registration timestamp
+        │
         ├─→ Move to "Staging" stage
-        │   └─ Ready for testing
+        │   └─ Ready for testing (no auto-promotion to Production)
         │
-        ├─→ NO automatic promotion to "Production"
-        │   └─ Manual UI click required
-        │
-        └─→ Output: Models in MLflow Staging
+        └─→ Output: Tagged models in MLflow Staging
 
 
 STAGE 9: DRIFT_REPORT
@@ -461,6 +470,36 @@ mlflow_run_ids (MLflow tracking)
 ```
 
 ---
+
+## Configuration Management
+
+```
+All pipeline orchestration and processing parameters are externalized to YAML configs:
+
+config/orchestration.yaml (NEW - controls Airflow DAG behavior)
+├─ dag: DAG name, owner, description, schedule, catchup policy
+├─ tasks: retry count, retry delay, specific task overrides
+├─ directories: data landing, raw, interim, features, reports
+└─ mlflow: tracking URI (http://mlflow-server:5000)
+
+config/pipeline.yaml (target, sources, problem type, split ratio)
+config/cleaning.yaml (type coercion, missing value handling)
+config/features.yaml (encoding strategies, polynomial features, scaling)
+config/models.yaml (hyperparameters for Ridge, LightGBM)
+
+All configs loaded via Pydantic models in src/utils/config.py
+- load_orchestration_config() → controls dags/pipeline.py behavior
+- load_pipeline_config() → defines target, sources, problem type
+- load_cleaning_config() → data cleaning recipes
+- load_features_config() → feature engineering recipes
+- load_models_config() → model hyperparameters
+
+Benefits:
+✓ No hardcoded parameters in Python code
+✓ Environment-specific overrides via environment variables
+✓ Type-safe validation at load time
+✓ Single source of truth for all parameters
+```
 
 ## Manifest.yaml Versioning
 

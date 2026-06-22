@@ -19,7 +19,9 @@ directories:
   interim: data/interim
   features: data/features
   reports: reports
-  config: config
+  # Point to the active pipeline's config directory.
+  # Swap to config/fraud, config/claims, etc. to run a different pipeline.
+  config: config/healthcare
 
 mlflow:
   tracking_uri: http://mlflow-server:5000
