@@ -474,31 +474,40 @@ mlflow_run_ids (MLflow tracking)
 ## Configuration Management
 
 ```
-All pipeline orchestration and processing parameters are externalized to YAML configs:
+All pipeline orchestration and processing parameters are externalized to YAML configs.
+Configs are split into two layers: a root-level orchestration config (Airflow-wide,
+pipeline-agnostic) and a per-pipeline config directory (one subfolder per dataset/use case):
 
-config/orchestration.yaml (NEW - controls Airflow DAG behavior)
+config/orchestration.yaml (controls Airflow DAG behavior, pipeline-agnostic)
 ├─ dag: DAG name, owner, description, schedule, catchup policy
 ├─ tasks: retry count, retry delay, specific task overrides
 ├─ directories: data landing, raw, interim, features, reports
+│   └─ config: which per-pipeline config dir to use (e.g. config/healthcare)
 └─ mlflow: tracking URI (http://mlflow-server:5000)
 
-config/pipeline.yaml (target, sources, problem type, split ratio)
-config/cleaning.yaml (type coercion, missing value handling)
-config/features.yaml (encoding strategies, polynomial features, scaling)
-config/models.yaml (hyperparameters for Ridge, LightGBM)
+config/healthcare/ (per-pipeline config dir, named per dataset/use case)
+├─ pipeline.yaml  (target, sources, problem type, split ratio)
+├─ cleaning.yaml  (type coercion, missing value handling)
+├─ features.yaml  (encoding strategies, polynomial features, scaling)
+└─ models.yaml    (hyperparameters for Ridge, LightGBM)
+
+The active per-pipeline config dir is selected via orchestration.yaml's
+directories.config field (defaults to "config/healthcare"), so adding a new
+pipeline means adding a new config/<name>/ folder, not editing code.
 
 All configs loaded via Pydantic models in src/utils/config.py
-- load_orchestration_config() → controls dags/pipeline.py behavior
-- load_pipeline_config() → defines target, sources, problem type
-- load_cleaning_config() → data cleaning recipes
-- load_features_config() → feature engineering recipes
-- load_models_config() → model hyperparameters
+- load_orchestration_config() → controls dags/pipeline.py behavior (config/orchestration.yaml)
+- load_pipeline_config(config_dir) → defines target, sources, problem type
+- load_cleaning_config(config_dir) → data cleaning recipes
+- load_features_config(config_dir) → feature engineering recipes
+- load_models_config(config_dir) → model hyperparameters
 
 Benefits:
 ✓ No hardcoded parameters in Python code
 ✓ Environment-specific overrides via environment variables
 ✓ Type-safe validation at load time
 ✓ Single source of truth for all parameters
+✓ New pipelines/datasets added as config dirs, no code changes
 ```
 
 ## Manifest.yaml Versioning

@@ -93,11 +93,11 @@ mlflow-artifacts/
 
 All config in `config/` directory, validated via Pydantic models:
 
-- `orchestration.yaml` — DAG parameters (schedule, owner, retries, directories, MLflow URI)
-- `pipeline.yaml` — Sources, target, problem type, split ratio
-- `cleaning.yaml` — Data cleaning recipes (type coercion, missing handling, dedup)
-- `features.yaml` — Feature engineering (encoding, polynomial features, scaling)
-- `models.yaml` — Model hyperparameters (linear, LightGBM)
+- `config/orchestration.yaml` — DAG parameters (schedule, owner, retries, directories, MLflow URI)
+- `config/healthcare/pipeline.yaml` — Sources, target, problem type, split ratio
+- `config/healthcare/cleaning.yaml` — Data cleaning recipes (type coercion, missing handling, dedup)
+- `config/healthcare/features.yaml` — Feature engineering (encoding, polynomial features, scaling)
+- `config/healthcare/models.yaml` — Model hyperparameters (linear, LightGBM)
 
 **Key Feature:** All DAG orchestration settings are in `orchestration.yaml` - change MLflow URI, directories, or schedule without touching Python code.
 

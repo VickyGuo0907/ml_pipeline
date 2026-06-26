@@ -183,7 +183,7 @@ services:
       - ${PWD}/mlflow-artifacts:/app/mlflow-artifacts:ro
     working_dir: /app
     command: >
-      bash -c "pip install -q uvicorn fastapi requests pydantic &&
+      bash -c "pip install -q uvicorn fastapi requests pydantic mlflow pandas scikit-learn lightgbm &&
       python -m uvicorn src.serve:app --host 0.0.0.0 --port 8000"
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:8000/health || exit 1"]

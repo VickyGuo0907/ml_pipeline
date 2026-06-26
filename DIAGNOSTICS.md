@@ -291,10 +291,10 @@ open reports/2026-05-19_baseline_drift_report.html
 cat config/orchestration.yaml
 
 # View pipeline config
-cat config/pipeline.yaml
+cat config/healthcare/pipeline.yaml
 
 # View model config
-cat config/models.yaml
+cat config/healthcare/models.yaml
 ```
 
 ### Validate configs load correctly:
