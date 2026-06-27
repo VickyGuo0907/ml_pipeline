@@ -47,7 +47,7 @@ EOF
 ### Option A: Via Airflow UI (Recommended)
 
 1. Open http://localhost:8080
-2. Navigate to **DAGs** → Search for `ml_pipeline`
+2. Navigate to **DAGs** → Search for `biomedical_clinical_pipeline`
 3. Click the DAG name
 4. Click the **Trigger DAG** button (play icon)
 5. Leave config empty, click **Trigger**
@@ -57,13 +57,13 @@ EOF
 
 ```bash
 # Trigger DAG from inside Airflow container
-docker exec airflow-scheduler airflow dags trigger ml_pipeline
+docker exec airflow-scheduler airflow dags trigger biomedical_clinical_pipeline
 
 # List DAG runs
-docker exec airflow-scheduler airflow dags list-runs --dag-id ml_pipeline
+docker exec airflow-scheduler airflow dags list-runs --dag-id biomedical_clinical_pipeline
 
 # Monitor a specific run
-docker exec airflow-scheduler airflow tasks list --dag-id ml_pipeline --state success
+docker exec airflow-scheduler airflow tasks list --dag-id biomedical_clinical_pipeline --state success
 ```
 
 ### What to Expect
@@ -148,7 +148,7 @@ ls -lh reports/
 ### Via MLflow UI
 
 1. Open http://localhost:5000
-2. Navigate to **Experiments** → **ml_pipeline** (default experiment)
+2. Navigate to **Experiments** → **biomedical_clinical_pipeline** (default experiment)
 3. Should see **2 runs** for the latest DAG execution:
    - Run 1: Linear Baseline (Ridge)
    - Run 2: LightGBM
@@ -167,7 +167,7 @@ export MLFLOW_TRACKING_URI=http://localhost:5000
 mlflow experiments list
 
 # List runs for ml_pipeline experiment
-mlflow runs list --experiment-name ml_pipeline
+mlflow runs list --experiment-name biomedical_clinical_pipeline
 
 # Get details on a specific run
 mlflow runs describe --run-id <run_id>
@@ -404,7 +404,7 @@ EOF
 ```bash
 # View task logs in Airflow UI
 # Or via CLI:
-docker exec airflow-scheduler airflow tasks logs ml_pipeline 01_ingest_files {execution_date}
+docker exec airflow-scheduler airflow tasks logs biomedical_clinical_pipeline 01_ingest_files {execution_date}
 ```
 
 **Common causes**:

@@ -17,7 +17,7 @@
         │                    ORCHESTRATION LAYER                     │
         │                    (Apache Airflow 3)                      │
         │  ┌──────────────────────────────────────────────────────┐  │
-        │  │  ml_pipeline DAG (9 stages)                          │  │
+        │  │  dag_factory → one DAG per config/pipelines/ dir     │  │
         │  │  ┌─────────┬──────────┬─────────┬───────┬──────────┐ │  │
         │  │  │ Ingest  │ Validate │ Profile │ Clean │ Features │ │  │
         │  │  └────┬────┴────┬─────┴────┬────┴───┬───┴────┬─────┘ │  │
@@ -475,28 +475,26 @@ mlflow_run_ids (MLflow tracking)
 
 ```
 All pipeline orchestration and processing parameters are externalized to YAML configs.
-Configs are split into two layers: a root-level orchestration config (Airflow-wide,
-pipeline-agnostic) and a per-pipeline config directory (one subfolder per dataset/use case):
+Configs are split into two layers: shared base defaults and per-pipeline config directories.
+dags/dag_factory.py discovers all pipeline directories and registers one Airflow DAG each.
 
-config/orchestration.yaml (controls Airflow DAG behavior, pipeline-agnostic)
-├─ dag: DAG name, owner, description, schedule, catchup policy
-├─ tasks: retry count, retry delay, specific task overrides
-├─ directories: data landing, raw, interim, features, reports
-│   └─ config: which per-pipeline config dir to use (e.g. config/healthcare)
+config/base/defaults.yaml (shared across all pipelines)
+├─ tasks: retry count, retry delay, per-task overrides
 └─ mlflow: tracking URI (http://mlflow-server:5000)
 
-config/healthcare/ (per-pipeline config dir, named per dataset/use case)
-├─ pipeline.yaml  (target, sources, problem type, split ratio)
-├─ cleaning.yaml  (type coercion, missing value handling)
-├─ features.yaml  (encoding strategies, polynomial features, scaling)
-└─ models.yaml    (hyperparameters for Ridge, LightGBM)
+config/<pipeline>/ (one directory per pipeline, e.g. biomedical_clinical, bioinfo_gene)
+├─ orchestration.yaml  (dag_id, schedule, tags, data directories — overrides base defaults)
+├─ pipeline.yaml       (target, sources, problem type, split ratio)
+├─ cleaning.yaml       (type coercion, missing value handling)
+├─ features.yaml       (encoding strategies, polynomial features, scaling)
+└─ models.yaml         (hyperparameters for Ridge, LightGBM)
 
-The active per-pipeline config dir is selected via orchestration.yaml's
-directories.config field (defaults to "config/healthcare"), so adding a new
-pipeline means adding a new config/<name>/ folder, not editing code.
+Adding a new pipeline: drop a new config/<name>/ directory with orchestration.yaml.
+dag_factory.py picks it up automatically on next Airflow parse — no Python changes needed.
 
 All configs loaded via Pydantic models in src/utils/config.py
-- load_orchestration_config() → controls dags/pipeline.py behavior (config/orchestration.yaml)
+- discover_pipelines() → scans config/ for pipeline directories
+- load_pipeline_orchestration_config() → merges base defaults + pipeline overrides
 - load_pipeline_config(config_dir) → defines target, sources, problem type
 - load_cleaning_config(config_dir) → data cleaning recipes
 - load_features_config(config_dir) → feature engineering recipes
@@ -504,10 +502,10 @@ All configs loaded via Pydantic models in src/utils/config.py
 
 Benefits:
 ✓ No hardcoded parameters in Python code
-✓ Environment-specific overrides via environment variables
+✓ Base defaults DRY — only overrides live in pipeline configs
 ✓ Type-safe validation at load time
 ✓ Single source of truth for all parameters
-✓ New pipelines/datasets added as config dirs, no code changes
+✓ New pipelines added as config dirs, zero code changes
 ```
 
 ## Manifest.yaml Versioning

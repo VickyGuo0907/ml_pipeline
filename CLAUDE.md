@@ -48,7 +48,7 @@ ml-pipeline/
 ├── README.md
 ├── pyproject.toml
 ├── uv.lock
-├── dags/pipeline.py
+├── dags/dag_factory.py
 ├── src/
 │   ├── ingest.py, validate.py, profile.py, clean.py
 │   ├── features.py, train.py, evaluate.py, register.py
@@ -56,7 +56,9 @@ ml-pipeline/
 │   ├── schemas/{raw.py, features.py}
 │   └── utils/{config.py, io.py}
 ├── config/
-│   ├── pipeline.yaml, cleaning.yaml, features.yaml, models.yaml
+│   ├── base/defaults.yaml
+│   ├── biomedical_clinical/{orchestration.yaml, pipeline.yaml, cleaning.yaml, features.yaml, models.yaml}
+│   └── bioinfo_gene/{orchestration.yaml, pipeline.yaml, cleaning.yaml, features.yaml, models.yaml}
 ├── data/{landing,raw,interim,features}/
 ├── mlflow-artifacts/
 ├── reports/

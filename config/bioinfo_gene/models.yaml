@@ -1,0 +1,18 @@
+# TODO: define models for gene expression prediction
+random_state: 42
+train_test_split: 0.80
+
+models:
+  - name: ridge_baseline
+    type: ridge
+    hyperparameters:
+      alpha: 1.0
+
+  - name: lightgbm_gbm
+    type: gbm
+    hyperparameters:
+      n_estimators: 100
+      learning_rate: 0.05
+      max_depth: 6
+      random_state: 42
+      n_jobs: -1

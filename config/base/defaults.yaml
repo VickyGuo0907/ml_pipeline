@@ -1,0 +1,10 @@
+# Shared defaults inherited by all pipeline orchestration configs.
+# Override any field in config/<pipeline>/orchestration.yaml.
+
+tasks:
+  retries: 1
+  retry_delay_minutes: 5
+  train_models_retries: 0
+
+mlflow:
+  tracking_uri: http://mlflow-server:5000

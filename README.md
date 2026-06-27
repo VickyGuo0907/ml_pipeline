@@ -93,13 +93,16 @@ mlflow-artifacts/
 
 All config in `config/` directory, validated via Pydantic models:
 
-- `config/orchestration.yaml` — DAG parameters (schedule, owner, retries, directories, MLflow URI)
-- `config/healthcare/pipeline.yaml` — Sources, target, problem type, split ratio
-- `config/healthcare/cleaning.yaml` — Data cleaning recipes (type coercion, missing handling, dedup)
-- `config/healthcare/features.yaml` — Feature engineering (encoding, polynomial features, scaling)
-- `config/healthcare/models.yaml` — Model hyperparameters (linear, LightGBM)
+- `config/base/defaults.yaml` — Shared defaults (retries, MLflow URI) inherited by all pipelines
+- `config/<pipeline>/orchestration.yaml` — Per-pipeline DAG settings (dag_id, schedule, directories)
+- `config/<pipeline>/pipeline.yaml` — Sources, target, problem type, split ratio
+- `config/<pipeline>/cleaning.yaml` — Data cleaning recipes (type coercion, missing handling, dedup)
+- `config/<pipeline>/features.yaml` — Feature engineering (encoding, polynomial features, scaling)
+- `config/<pipeline>/models.yaml` — Model hyperparameters (linear, LightGBM)
 
-**Key Feature:** All DAG orchestration settings are in `orchestration.yaml` - change MLflow URI, directories, or schedule without touching Python code.
+Active pipelines: `biomedical_clinical` (@weekly), `bioinfo_gene` (@monthly).
+
+**Key Feature:** `dags/dag_factory.py` auto-discovers pipeline directories and registers one Airflow DAG per pipeline. Add a new pipeline by dropping a new `config/<name>/` directory — no Python changes needed.
 
 ### Testing
 
@@ -158,7 +161,7 @@ The DIAGNOSTICS.md guide covers:
 #### Running the DAG
 
 1. Open Airflow UI: http://localhost:8080
-2. Find `ml_pipeline` DAG
+2. Find `biomedical_clinical_pipeline` or `bioinfo_gene_pipeline`
 3. Click **Trigger DAG** (or wait for next scheduled run)
 4. Monitor task execution in the Graph view
 
@@ -229,7 +232,7 @@ uv run pytest tests/ -v  # Full verbose output
 
 1. Place sample Hospital Compare CSVs in `data/landing/`
 2. Follow the [TESTING.md](TESTING.md) guide to:
-   - Trigger the complete `ml_pipeline` DAG in Airflow
+   - Trigger `biomedical_clinical_pipeline` DAG in Airflow
    - Validate outputs at each stage (raw → interim → features → models)
    - Promote a trained model to Production in MLflow
    - Test FastAPI `/predict` endpoint with sample data

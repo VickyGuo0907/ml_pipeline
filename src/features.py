@@ -81,7 +81,7 @@ def engineer_features(
         interim_dir: Directory containing cleaned interim data.
         features_dir: Output directory for feature matrices.
         run_id: Run identifier.
-        config_dir: Pipeline config directory (e.g. config/healthcare).
+        config_dir: Pipeline config directory (e.g. config/biomedical_clinical).
 
     Returns:
         Dictionary with feature matrix paths, shapes, and transform metadata.

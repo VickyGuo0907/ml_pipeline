@@ -1,0 +1,18 @@
+dag:
+  dag_id: bioinfo_gene_pipeline
+  owner: data-eng
+  description: Bioinformatics gene expression prediction pipeline
+  schedule_interval: "@monthly"
+  catchup: false
+  tags:
+    - ml
+    - bioinformatics
+    - genomics
+
+directories:
+  landing: data/bioinfo_gene/landing
+  raw: data/bioinfo_gene/raw
+  interim: data/bioinfo_gene/interim
+  features: data/bioinfo_gene/features
+  reports: reports/bioinfo_gene
+  config: config/bioinfo_gene

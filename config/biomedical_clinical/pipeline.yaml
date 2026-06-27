@@ -1,8 +1,8 @@
-# CMS Healthcare Readmission Pipeline
+# Biomedical Clinical Pipeline
 # Workflow: Raw CMS Hospital Compare → Readmission prediction
 # Reference: health_care_ml_pipeline.svg
 
-pipeline_type: healthcare_readmission
+pipeline_type: biomedical_clinical
 
 sources:
   - name: "hospital_compare_pneumonia"

@@ -5,32 +5,34 @@ from src.utils.config import (
     CleaningConfig,
     FeaturesConfig,
     ModelsConfig,
+    OrchestrationConfig,
     PipelineConfig,
+    discover_pipelines,
     load_cleaning_config,
     load_features_config,
     load_models_config,
     load_pipeline_config,
+    load_pipeline_orchestration_config,
 )
 
-# Canonical config dir for the healthcare pipeline
-HEALTHCARE_CONFIG = "config/healthcare"
+BIOMEDICAL_CONFIG = "config/biomedical_clinical"
 
 
 def test_load_pipeline_config():
-    """Test loading and validating the healthcare pipeline configuration."""
-    config = load_pipeline_config(HEALTHCARE_CONFIG)
+    """Test loading and validating the biomedical_clinical pipeline configuration."""
+    config = load_pipeline_config(BIOMEDICAL_CONFIG)
     assert isinstance(config, PipelineConfig)
     assert config.target.name == "Excess Readmission Ratio"
     assert config.target.type == "continuous"
     assert config.problem_type.value == "regression"
     assert config.train_test_split == 0.81
-    assert config.pipeline_type == "healthcare_readmission"
+    assert config.pipeline_type == "biomedical_clinical"
     assert len(config.sources) >= 1
 
 
 def test_load_cleaning_config():
-    """Test loading and validating the healthcare cleaning configuration."""
-    config = load_cleaning_config(HEALTHCARE_CONFIG)
+    """Test loading and validating the biomedical_clinical cleaning configuration."""
+    config = load_cleaning_config(BIOMEDICAL_CONFIG)
     assert isinstance(config, CleaningConfig)
     assert config.impute_strategy == "iterative"
     assert len(config.drop_column_patterns) > 0
@@ -40,8 +42,8 @@ def test_load_cleaning_config():
 
 
 def test_load_features_config():
-    """Test loading and validating the healthcare features configuration."""
-    config = load_features_config(HEALTHCARE_CONFIG)
+    """Test loading and validating the biomedical_clinical features configuration."""
+    config = load_features_config(BIOMEDICAL_CONFIG)
     assert isinstance(config, FeaturesConfig)
     assert config.nzv_threshold == 0.95
     assert config.scale is True
@@ -53,8 +55,8 @@ def test_load_features_config():
 
 
 def test_load_models_config():
-    """Test loading and validating the healthcare models configuration."""
-    config = load_models_config(HEALTHCARE_CONFIG)
+    """Test loading and validating the biomedical_clinical models configuration."""
+    config = load_models_config(BIOMEDICAL_CONFIG)
     assert isinstance(config, ModelsConfig)
     model_names = [m.name for m in config.models]
     assert "ols_baseline" in model_names
@@ -64,6 +66,42 @@ def test_load_models_config():
     assert "random_forest" in model_names
     assert "lightgbm_gbm" in model_names
     assert config.random_state == 42
+
+
+def test_discover_pipelines():
+    """Test that discover_pipelines finds all pipeline config directories."""
+    pipelines = discover_pipelines("config")
+    dag_ids = [p.name for p in pipelines]
+    assert "biomedical_clinical" in dag_ids
+    assert "bioinfo_gene" in dag_ids
+    assert "base" not in dag_ids
+
+
+def test_load_pipeline_orchestration_config_merges_defaults():
+    """Test that pipeline orchestration merges base defaults with pipeline overrides."""
+    config = load_pipeline_orchestration_config(
+        pipeline_dir=BIOMEDICAL_CONFIG,
+        base_dir="config/base",
+    )
+    assert isinstance(config, OrchestrationConfig)
+    assert config.dag.dag_id == "biomedical_clinical_pipeline"
+    assert config.dag.schedule_interval == "@weekly"
+    # Base defaults applied
+    assert config.tasks.retries == 1
+    assert config.mlflow.tracking_uri == "http://mlflow-server:5000"
+    # Pipeline directories applied
+    assert config.directories.config == "config/biomedical_clinical"
+
+
+def test_load_bioinfo_gene_orchestration_config():
+    """Test bioinfo_gene pipeline config loads and merges correctly."""
+    config = load_pipeline_orchestration_config(
+        pipeline_dir="config/bioinfo_gene",
+        base_dir="config/base",
+    )
+    assert config.dag.dag_id == "bioinfo_gene_pipeline"
+    assert config.dag.schedule_interval == "@monthly"
+    assert config.tasks.retries == 1  # inherited from base
 
 
 def test_pipeline_config_validation():

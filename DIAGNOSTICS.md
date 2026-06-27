@@ -151,7 +151,7 @@ features_schema.validate(df)  # Raises if invalid
 **Check training logs:**
 ```bash
 # View task logs in Airflow UI
-http://localhost:8080 → ml_pipeline → 07_train_models → Logs
+http://localhost:8080 → biomedical_clinical_pipeline → 07_train_models → Logs
 
 # Check metrics in MLflow
 http://localhost:5000 → Experiments → Default → Run details
@@ -287,31 +287,40 @@ open reports/2026-05-19_baseline_drift_report.html
 ### Check your current config:
 
 ```bash
-# View orchestration config
-cat config/orchestration.yaml
+# View base defaults
+cat config/base/defaults.yaml
+
+# View pipeline orchestration (e.g. biomedical_clinical)
+cat config/biomedical_clinical/orchestration.yaml
 
 # View pipeline config
-cat config/healthcare/pipeline.yaml
+cat config/biomedical_clinical/pipeline.yaml
 
 # View model config
-cat config/healthcare/models.yaml
+cat config/biomedical_clinical/models.yaml
 ```
 
 ### Validate configs load correctly:
 
 ```python
-from src.utils import (
-    load_orchestration_config,
+from src.utils.config import (
+    discover_pipelines,
+    load_pipeline_orchestration_config,
     load_pipeline_config,
     load_models_config,
-    load_features_config,
-    load_cleaning_config
 )
 
+# Discover all registered pipelines
+pipelines = discover_pipelines("config")
+print([p.name for p in pipelines])
+
+# Load merged config for a specific pipeline
+cfg = load_pipeline_orchestration_config("config/biomedical_clinical", "config/base")
+print(cfg.dag.dag_id, cfg.tasks.retries)
+
 # These should not raise exceptions
-orch_cfg = load_orchestration_config()
-pipe_cfg = load_pipeline_config()
-model_cfg = load_models_config()
+pipe_cfg = load_pipeline_config("config/biomedical_clinical")
+model_cfg = load_models_config("config/biomedical_clinical")
 ```
 
 ## MLflow Integration Debugging
@@ -350,7 +359,7 @@ for run in runs[:3]:
 ### Check Airflow task logs:
 
 1. Go to http://localhost:8080
-2. Click `ml_pipeline` DAG
+2. Click `biomedical_clinical_pipeline` or `bioinfo_gene_pipeline` DAG
 3. Click failing task → Logs tab
 4. Look for error messages
 

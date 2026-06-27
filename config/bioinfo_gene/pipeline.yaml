@@ -1,0 +1,17 @@
+# Bioinformatics Gene Expression Pipeline
+# Workflow: Raw gene expression CSV → expression level prediction
+
+pipeline_type: bioinfo_gene
+
+sources:
+  - name: gene_expression
+    path: data/bioinfo_gene/landing
+    format: csv
+
+target:
+  name: expression_level
+  type: continuous
+
+problem_type: regression
+train_test_split: 0.80
+random_state: 42

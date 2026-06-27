@@ -20,10 +20,11 @@ venv/
 .vscode/
 *.iml
 
-# Data outputs (versioned by run_id, not committed)
-data/raw/*/
-data/interim/*/
-data/features/*/
+# Data (not committed — keep only .gitkeep dir markers)
+# Covers both flat layout and per-pipeline layout (data/<pipeline>/<stage>/)
+data/**
+!data/**/
+!data/**/.gitkeep
 .data/
 
 # ML artifacts

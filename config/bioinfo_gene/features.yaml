@@ -1,0 +1,6 @@
+# TODO: define feature engineering steps for gene expression data
+encoding: {}
+steps: []
+nzv_threshold: 0.95
+drop_columns: []
+scale: true

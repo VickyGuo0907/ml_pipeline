@@ -64,7 +64,7 @@ def train_models(
     Args:
         features_dir: Directory containing train/test parquet files.
         run_id: Run identifier.
-        config_dir: Pipeline config directory (e.g. config/healthcare).
+        config_dir: Pipeline config directory (e.g. config/biomedical_clinical).
         mlflow_tracking_uri: MLflow tracking server URI.
 
     Returns:

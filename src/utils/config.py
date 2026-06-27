@@ -129,7 +129,7 @@ class ModelsConfig(BaseModel):
 class OrchestrationDAGConfig(BaseModel):
     """DAG-level orchestration settings."""
 
-    dag_id: str = Field(default="ml_pipeline", description="DAG identifier")
+    dag_id: str = Field(default="pipeline", description="DAG identifier")
     owner: str = Field(default="data-eng", description="DAG owner")
     description: str = Field(
         default="End-to-end ML pipeline: ingest → train → serve",
@@ -265,3 +265,56 @@ def load_orchestration_config(config_dir: str | Path = "config") -> Orchestratio
         return OrchestrationConfig()
     config_data = load_config(config_path)
     return OrchestrationConfig(**config_data)
+
+
+def load_pipeline_orchestration_config(
+    pipeline_dir: str | Path,
+    base_dir: str | Path = "config/base",
+) -> OrchestrationConfig:
+    """Load orchestration config by merging shared base defaults with pipeline overrides.
+
+    Base defaults (config/base/defaults.yaml) are loaded first; the pipeline's
+    orchestration.yaml is then deep-merged on top so pipeline values win.
+
+    Args:
+        pipeline_dir: Directory for the specific pipeline (e.g. config/biomedical_clinical)
+        base_dir: Directory containing base/defaults.yaml
+
+    Returns:
+        Validated OrchestrationConfig
+    """
+    base_path = Path(base_dir) / "defaults.yaml"
+    pipeline_path = Path(pipeline_dir) / "orchestration.yaml"
+
+    merged: dict[str, Any] = {}
+    if base_path.exists():
+        merged = load_config(base_path)
+
+    if pipeline_path.exists():
+        pipeline_data = load_config(pipeline_path)
+        for key, value in pipeline_data.items():
+            if isinstance(value, dict) and isinstance(merged.get(key), dict):
+                merged[key] = {**merged[key], **value}
+            else:
+                merged[key] = value
+
+    return OrchestrationConfig(**merged) if merged else OrchestrationConfig()
+
+
+def discover_pipelines(config_root: str | Path = "config") -> list[Path]:
+    """Discover pipeline config directories under config_root.
+
+    A valid pipeline directory contains an orchestration.yaml file.
+    The base/ directory is excluded.
+
+    Args:
+        config_root: Root config directory to scan
+
+    Returns:
+        Sorted list of pipeline config directory paths
+    """
+    root = Path(config_root)
+    return sorted(
+        p for p in root.iterdir()
+        if p.is_dir() and p.name != "base" and (p / "orchestration.yaml").exists()
+    )

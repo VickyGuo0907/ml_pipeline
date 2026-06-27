@@ -72,7 +72,7 @@ def register_models_to_mlflow(
             # Tags on the registered model (top-level, visible in Models list)
             registered_model_tags = {
                 "team": "data-eng",
-                "project": "ml_pipeline",
+                "project": "ml-pipeline",
                 "model_type": model_type,
             }
             for key, value in registered_model_tags.items():
@@ -114,7 +114,7 @@ def register_models_to_mlflow(
                 description=(
                     f"{model_name} ({model_type}) — "
                     f"Hospital readmission prediction model. "
-                    f"Registered by ml_pipeline DAG."
+                    f"Registered by dag_factory pipeline."
                 ),
             )
 

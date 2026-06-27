@@ -91,7 +91,7 @@ class TestIngest:
             assert len(hash1) == 64  # SHA256 hex is 64 chars
 
 
-HEALTHCARE_CONFIG = "config/healthcare"
+HEALTHCARE_CONFIG = "config/biomedical_clinical"
 
 
 class TestClean:

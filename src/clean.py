@@ -93,7 +93,7 @@ def clean_raw_data(
         raw_dir: Base directory containing raw data.
         interim_dir: Output directory for cleaned data.
         run_id: Run identifier to locate/version data.
-        config_dir: Pipeline config directory (e.g. config/healthcare).
+        config_dir: Pipeline config directory (e.g. config/biomedical_clinical).
 
     Returns:
         Dictionary with cleaning statistics per file.
