@@ -2,7 +2,7 @@ dag:
   dag_id: bioinfo_gene_pipeline
   owner: data-eng
   description: Bioinformatics gene expression prediction pipeline
-  schedule_interval: "@monthly"
+  schedule: "@monthly"
   catchup: false
   tags:
     - ml

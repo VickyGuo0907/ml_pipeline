@@ -2,7 +2,7 @@ dag:
   dag_id: biomedical_clinical_pipeline
   owner: data-eng
   description: Biomedical clinical readmission prediction — CMS Hospital Compare
-  schedule_interval: "@weekly"
+  schedule: "@weekly"
   catchup: false
   tags:
     - ml

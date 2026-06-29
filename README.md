@@ -52,11 +52,11 @@ End-to-end machine learning pipeline demonstrating orchestration, validation, tr
 
 ### Stages (9 tasks in sequence)
 
-1. **ingest** — Move files from `data/landing` to `data/raw/<run_id>`, write `manifest.yaml`
+1. **ingest** — Move files from `data/<pipeline>/landing` to `data/<pipeline>/raw/<run_id>`, write `manifest.yaml`
 2. **validate_raw** — Pandera schema validation on raw data per source
 3. **profile** — ydata-profiling HTML reports per source
-4. **clean** — Type coercion, missing value handling, deduplication → `data/interim/<run_id>`
-5. **feature_engineer** — Joins, encoding, NZV filtering, train/test split → `data/features/<run_id>`
+4. **clean** — Type coercion, missing value handling, deduplication → `data/<pipeline>/interim/<run_id>`
+5. **feature_engineer** — Joins, encoding, NZV filtering, train/test split → `data/<pipeline>/features/<run_id>`
 6. **validate_features** — Pandera schema check on feature matrix
 7. **train** — sklearn linear + LightGBM models, log metrics to MLflow
 8. **register** — Register both models to MLflow Staging (no auto-promotion)
@@ -65,13 +65,13 @@ End-to-end machine learning pipeline demonstrating orchestration, validation, tr
 ### Data Flow
 
 ```
-data/landing
+data/<pipeline>/landing          (e.g. data/biomedical_clinical/landing)
     ↓ [ingest]
-data/raw/<run_id>/manifest.yaml
+data/<pipeline>/raw/<run_id>/manifest.yaml
     ↓ [validate_raw] [profile]
-data/interim/<run_id>
+data/<pipeline>/interim/<run_id>
     ↓ [clean]
-data/features/<run_id>/
+data/<pipeline>/features/<run_id>/
 ├── train.parquet
 ├── test.parquet
 └── manifest.yaml
@@ -102,7 +102,7 @@ All config in `config/` directory, validated via Pydantic models:
 
 Active pipelines: `biomedical_clinical` (@weekly), `bioinfo_gene` (@monthly).
 
-**Key Feature:** `dags/dag_factory.py` auto-discovers pipeline directories and registers one Airflow DAG per pipeline. Add a new pipeline by dropping a new `config/<name>/` directory — no Python changes needed.
+**Key Feature:** `src/dags/dag_factory.py` auto-discovers pipeline directories and registers one Airflow DAG per pipeline. Add a new pipeline by dropping a new `config/<name>/` directory — no Python changes needed.
 
 ### Testing
 
@@ -137,10 +137,10 @@ The TESTING.md guide covers:
 Quick diagnostic check:
 ```bash
 # Run comprehensive diagnostics
-python3 scripts/diagnose_pipeline.py
+python3 src/scripts/diagnose_pipeline.py
 
 # Analyze model performance
-python3 scripts/analyze_models.py
+python3 src/scripts/analyze_models.py
 
 # Or in Docker environment
 docker-compose exec airflow-scheduler python3 /path/to/script.py
@@ -191,7 +191,7 @@ CMS Hospital Compare data (multi-source CSV):
 - **Columns:** Quality measures, HCAHPS scores, safety grades
 - **Target:** `ExcessReadmissionRatio` (pneumonia readmissions, continuous)
 
-Place CSV files in `data/landing/` before running the DAG.
+Place CSV or Parquet files in `data/biomedical_clinical/landing/` before running the DAG.
 
 ## Key Design Decisions
 
@@ -230,7 +230,7 @@ uv run pytest tests/ -v  # Full verbose output
 
 ## Next Steps
 
-1. Place sample Hospital Compare CSVs in `data/landing/`
+1. Place sample Hospital Compare CSVs in `data/biomedical_clinical/landing/`
 2. Follow the [TESTING.md](TESTING.md) guide to:
    - Trigger `biomedical_clinical_pipeline` DAG in Airflow
    - Validate outputs at each stage (raw → interim → features → models)

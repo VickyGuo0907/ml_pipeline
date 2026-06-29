@@ -21,10 +21,10 @@ Access points:
 
 ## Phase 1: Prepare Sample Data
 
-Sample data is located in `data/landing/`:
+Sample data is located in `data/biomedical_clinical/landing/`:
 
 ```bash
-ls -lh data/landing/
+ls -lh data/biomedical_clinical/landing/
 # Should contain hospital_compare_sample.csv (or other CSVs)
 ```
 
@@ -32,7 +32,7 @@ If sample data is missing, create it:
 
 ```bash
 # Create a minimal test CSV with required columns
-cat > data/landing/hospital_compare_sample.csv << 'EOF'
+cat > data/biomedical_clinical/landing/hospital_compare_sample.csv << 'EOF'
 FacilityId,Facility Name,State,City,Address,ZIP Code,ExcessReadmissionRatio,Mortality Rate,Safety Grade,HCAHPS_Cleanliness,HCAHPS_Communication,HCAHPS_Responsiveness,HCAHPS_Pain_Management,HCAHPS_Medication,HCAHPS_Discharge,HCAHPS_Quiet,ComparedToNational_Mortality,ComparedToNational_Safety,ComparedToNational_Readmission,ComparedToNational_MRSA Bacteremia,ComparedToNational_Clostridium difficile,Number of Beds,Hospital Beds,Census Region
 1,Hospital A,NY,New York,123 Main St,10001,0.95,0.05,A,75.0,80.0,70.0,78.0,81.0,79.0,68.0,Below,Below,Same,Below,Below,150,150.0,Northeast
 2,Hospital B,CA,Los Angeles,456 Oak Ave,90001,1.05,0.06,B,78.0,82.0,75.0,80.0,83.0,81.0,70.0,Same,Same,Above,Below,Same,200,200.0,West
@@ -69,11 +69,11 @@ docker exec airflow-scheduler airflow tasks list --dag-id biomedical_clinical_pi
 ### What to Expect
 
 The DAG executes 9 stages in sequence:
-1. **01_ingest_files** — Reads CSVs from `data/landing/`, outputs to `data/raw/{run_id}/`
+1. **01_ingest_files** — Reads files from `data/<pipeline>/landing/`, outputs to `data/<pipeline>/raw/{run_id}/`
 2. **02_validate_raw_schema** — Validates raw files against Pandera schema
 3. **03_profile_data** — Generates ydata-profiling HTML reports in `reports/`
-4. **04_clean_data** — Type coercion, missing handling → `data/interim/{run_id}/`
-5. **05_engineer_features** — Encoding, scaling, train/test split → `data/features/{run_id}/`
+4. **04_clean_data** — Type coercion, missing handling → `data/<pipeline>/interim/{run_id}/`
+5. **05_engineer_features** — Encoding, scaling, train/test split → `data/<pipeline>/features/{run_id}/`
 6. **06_validate_features_schema** — Validates feature matrix against schema
 7. **07_train_models** — Trains Ridge + LightGBM, logs to MLflow
 8. **08_register_to_mlflow** — Registers models to MLflow **Staging** stage
@@ -88,24 +88,24 @@ After DAG completion, verify outputs at each stage:
 ### Check Raw Data
 
 ```bash
-ls -lh data/raw/
+ls -lh data/biomedical_clinical/raw/
 # Should see: {run_id}/ directory with manifest.yaml and ingested CSVs
 
 # Check manifest for integrity
-cat data/raw/{run_id}/manifest.yaml
+cat data/biomedical_clinical/raw/{run_id}/manifest.yaml
 # Look for: file count, checksums, timestamps
 ```
 
 ### Check Interim (Cleaned) Data
 
 ```bash
-ls -lh data/interim/{run_id}/
+ls -lh data/biomedical_clinical/interim/{run_id}/
 # Should contain: cleaned CSVs, manifest.yaml
 
 # Quick stats
 python -c "
 import pandas as pd
-df = pd.read_csv('data/interim/{run_id}/hospital_compare_sample.csv')
+df = pd.read_csv('data/biomedical_clinical/interim/{run_id}/hospital_compare_sample.csv')
 print(f'Shape: {df.shape}')
 print(f'Columns: {list(df.columns)}')
 print(f'Missing %: {df.isnull().mean().mean()*100:.1f}%')
@@ -115,14 +115,14 @@ print(f'Missing %: {df.isnull().mean().mean()*100:.1f}%')
 ### Check Feature Matrix
 
 ```bash
-ls -lh data/features/{run_id}/
+ls -lh data/biomedical_clinical/features/{run_id}/
 # Should contain: train.parquet, test.parquet, manifest.yaml
 
 # Inspect feature shapes and dtypes
 python -c "
 import pandas as pd
-train = pd.read_parquet('data/features/{run_id}/train.parquet')
-test = pd.read_parquet('data/features/{run_id}/test.parquet')
+train = pd.read_parquet('data/biomedical_clinical/features/{run_id}/train.parquet')
+test = pd.read_parquet('data/biomedical_clinical/features/{run_id}/test.parquet')
 print(f'Train shape: {train.shape}')
 print(f'Test shape: {test.shape}')
 print(f'Columns: {list(train.columns)}')
@@ -337,7 +337,7 @@ import pandas as pd
 import requests
 
 # Load test features
-test_df = pd.read_parquet('data/features/{run_id}/test.parquet')
+test_df = pd.read_parquet('data/biomedical_clinical/features/{run_id}/test.parquet')
 
 # Take first 5 samples (drop target)
 samples = test_df.drop('ExcessReadmissionRatio', axis=1).head(5)
@@ -408,7 +408,7 @@ docker exec airflow-scheduler airflow tasks logs biomedical_clinical_pipeline 01
 ```
 
 **Common causes**:
-- Missing input files in `data/landing/`
+- Missing input files in `data/biomedical_clinical/landing/`
 - Schema validation failure (column names/types mismatch)
 - MLflow connection error (check MLFLOW_TRACKING_URI env var)
 
@@ -445,9 +445,9 @@ curl -s http://localhost:8000/health | jq .model_loaded
 **Check volume mounts**:
 ```bash
 # Verify data directories are bind-mounted
-docker exec airflow-scheduler ls -lh /home/airflow/data/raw/
-docker exec airflow-scheduler ls -lh /home/airflow/data/interim/
-docker exec airflow-scheduler ls -lh /home/airflow/data/features/
+docker exec airflow-scheduler ls -lh /home/airflow/data/biomedical_clinical/raw/
+docker exec airflow-scheduler ls -lh /home/airflow/data/biomedical_clinical/interim/
+docker exec airflow-scheduler ls -lh /home/airflow/data/biomedical_clinical/features/
 ```
 
 **Run date format**:
@@ -457,12 +457,12 @@ DAG uses ISO date (YYYY-MM-DD) as run_id. Verify directory names match.
 
 ## Full Test Checklist
 
-- [ ] Sample data exists in `data/landing/`
+- [ ] Sample data exists in `data/biomedical_clinical/landing/`
 - [ ] DAG triggered successfully
 - [ ] All 9 tasks complete in Airflow UI
-- [ ] `data/raw/{run_id}/manifest.yaml` created
-- [ ] `data/interim/{run_id}/` contains cleaned files
-- [ ] `data/features/{run_id}/{train,test}.parquet` created
+- [ ] `data/biomedical_clinical/raw/{run_id}/manifest.yaml` created
+- [ ] `data/biomedical_clinical/interim/{run_id}/` contains cleaned files
+- [ ] `data/biomedical_clinical/features/{run_id}/{train,test}.parquet` created
 - [ ] `reports/profile_*.html` generated
 - [ ] 2 model runs visible in MLflow
 - [ ] At least 1 model registered to MLflow registry

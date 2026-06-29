@@ -11,7 +11,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from datetime import timedelta  # noqa: E402
+from datetime import datetime, timedelta  # noqa: E402
 
 from airflow import DAG  # noqa: E402
 from airflow.models import TaskInstance  # noqa: E402
@@ -43,6 +43,7 @@ def build_dag(config: OrchestrationConfig) -> DAG:
     """
     default_args = {
         "owner": config.dag.owner,
+        "start_date": datetime.strptime(config.dag.start_date, "%Y-%m-%d"),
         "retries": config.tasks.retries,
         "retry_delay": timedelta(minutes=config.tasks.retry_delay_minutes),
         "email_on_failure": False,
@@ -53,7 +54,7 @@ def build_dag(config: OrchestrationConfig) -> DAG:
         config.dag.dag_id,
         default_args=default_args,
         description=config.dag.description,
-        schedule_interval=config.dag.schedule_interval,
+        schedule=config.dag.schedule,
         catchup=config.dag.catchup,
         tags=config.dag.tags,
     )
@@ -161,53 +162,53 @@ def build_dag(config: OrchestrationConfig) -> DAG:
         ingest_task = PythonOperator(
             task_id="01_ingest_files",
             python_callable=ingest_wrapper,
-            provide_context=True,
+
         )
         validate_raw_task = PythonOperator(
             task_id="02_validate_raw_schema",
             python_callable=validate_raw_wrapper,
-            provide_context=True,
+
         )
         profile_task = PythonOperator(
             task_id="03_profile_data",
             python_callable=profile_wrapper,
-            provide_context=True,
+
         )
         clean_task = PythonOperator(
             task_id="04_clean_data",
             python_callable=clean_wrapper,
-            provide_context=True,
+
         )
         feature_task = PythonOperator(
             task_id="05_engineer_features",
             python_callable=features_wrapper,
-            provide_context=True,
+
         )
         validate_features_task = PythonOperator(
             task_id="06_validate_features_schema",
             python_callable=validate_features_wrapper,
-            provide_context=True,
+
         )
         explore_task = PythonOperator(
             task_id="06b_unsupervised_explore",
             python_callable=explore_wrapper,
-            provide_context=True,
+
         )
         train_task = PythonOperator(
             task_id="07_train_models",
             python_callable=train_wrapper,
-            provide_context=True,
+
             retries=config.tasks.train_models_retries,
         )
         register_task = PythonOperator(
             task_id="08_register_to_mlflow",
             python_callable=register_wrapper,
-            provide_context=True,
+
         )
         drift_task = PythonOperator(
             task_id="09_drift_report",
             python_callable=drift_wrapper,
-            provide_context=True,
+
         )
 
         # Pipeline flow — explore runs in parallel with validate_features

@@ -58,14 +58,16 @@ services:
       AIRFLOW__WEBSERVER__EXPOSE_CONFIG: "True"
       AIRFLOW__CORE__EXECUTOR: LocalExecutor
       AIRFLOW__WEBSERVER__SECRET_KEY: ${AIRFLOW_SECRET_KEY:-change-me-in-production}
+      AIRFLOW__LOGGING__BASE_LOG_FOLDER: /opt/airflow/logs
     ports:
       - "8080:8080"
     volumes:
-      - ${PWD}/dags:/opt/airflow/dags
+      - ${PWD}/src/dags:/opt/airflow/dags
       - ${PWD}/src:/opt/airflow/src
       - ${PWD}/config:/opt/airflow/config
       - ${PWD}/data:/opt/airflow/data
       - ${PWD}/mlflow-artifacts:/opt/airflow/mlflow-artifacts
+      - airflow-logs:/opt/airflow/logs
     entrypoint: >
       bash -c "airflow db migrate && airflow webserver"
     healthcheck:
@@ -92,12 +94,14 @@ services:
       AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql://airflow:${AIRFLOW_DB_PASSWORD:-airflow}@airflow-postgres:5432/airflow
       AIRFLOW__CORE__EXECUTOR: LocalExecutor
       AIRFLOW__WEBSERVER__SECRET_KEY: ${AIRFLOW_SECRET_KEY:-change-me-in-production}
+      AIRFLOW__LOGGING__BASE_LOG_FOLDER: /opt/airflow/logs
     volumes:
-      - ${PWD}/dags:/opt/airflow/dags
+      - ${PWD}/src/dags:/opt/airflow/dags
       - ${PWD}/src:/opt/airflow/src
       - ${PWD}/config:/opt/airflow/config
       - ${PWD}/data:/opt/airflow/data
       - ${PWD}/mlflow-artifacts:/opt/airflow/mlflow-artifacts
+      - airflow-logs:/opt/airflow/logs
     command: scheduler
     healthcheck:
       test: ["CMD-SHELL", "airflow jobs check --job-type SchedulerJob --hostname $$(hostname) || exit 1"]
@@ -122,12 +126,14 @@ services:
       AIRFLOW__CORE__UNIT_TEST_MODE: "False"
       AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql://airflow:${AIRFLOW_DB_PASSWORD:-airflow}@airflow-postgres:5432/airflow
       AIRFLOW__WEBSERVER__SECRET_KEY: ${AIRFLOW_SECRET_KEY:-change-me-in-production}
+      AIRFLOW__LOGGING__BASE_LOG_FOLDER: /opt/airflow/logs
     volumes:
-      - ${PWD}/dags:/opt/airflow/dags
+      - ${PWD}/src/dags:/opt/airflow/dags
       - ${PWD}/src:/opt/airflow/src
       - ${PWD}/config:/opt/airflow/config
       - ${PWD}/data:/opt/airflow/data
       - ${PWD}/mlflow-artifacts:/opt/airflow/mlflow-artifacts
+      - airflow-logs:/opt/airflow/logs
     command: triggerer
     healthcheck:
       test: ["CMD-SHELL", "airflow jobs check --job-type TriggererJob --hostname $$(hostname) || exit 1"]
@@ -196,6 +202,7 @@ services:
 volumes:
   airflow-postgres-db:
   mlflow-postgres-db:
+  airflow-logs:
 
 networks:
   ml-pipeline:

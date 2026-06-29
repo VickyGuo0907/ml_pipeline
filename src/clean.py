@@ -1,7 +1,7 @@
 """Data cleaning stage: type coercion, imputation, deduplication."""
 import logging
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import pandas as pd
 import yaml
@@ -10,6 +10,38 @@ from src.utils.config import load_cleaning_config
 from src.utils.transforms import IMPUTE_REGISTRY, drop_pattern_columns
 
 logger = logging.getLogger(__name__)
+
+
+def _read_csv(file_path: Path) -> pd.DataFrame:
+    """Read a CSV file into a DataFrame."""
+    return pd.read_csv(file_path)
+
+
+def _read_parquet(file_path: Path) -> pd.DataFrame:
+    """Read a Parquet file into a DataFrame."""
+    return pd.read_parquet(file_path)
+
+
+def _write_csv(df: pd.DataFrame, path: Path) -> None:
+    """Write a DataFrame to CSV."""
+    df.to_csv(path, index=False)
+
+
+def _write_parquet(df: pd.DataFrame, path: Path) -> None:
+    """Write a DataFrame to Parquet."""
+    df.to_parquet(path, index=False)
+
+
+# Maps file extension → reader/writer pair. Register new formats here.
+READERS: dict[str, Callable[[Path], pd.DataFrame]] = {
+    ".csv": _read_csv,
+    ".parquet": _read_parquet,
+}
+
+WRITERS: dict[str, Callable[[pd.DataFrame, Path], None]] = {
+    ".csv": _write_csv,
+    ".parquet": _write_parquet,
+}
 
 
 def _apply_type_coercion(df: pd.DataFrame) -> pd.DataFrame:
@@ -24,7 +56,6 @@ def _apply_type_coercion(df: pd.DataFrame) -> pd.DataFrame:
     df = df.replace({"Too Few to Report": None, "Not Available": None})
     for col in df.select_dtypes(include=["object"]).columns:
         coerced = pd.to_numeric(df[col], errors="coerce")
-        # Only replace if most non-null values successfully converted
         if coerced.notna().sum() > df[col].notna().sum() * 0.5:
             df[col] = coerced
     return df
@@ -48,28 +79,27 @@ def _drop_high_missing(df: pd.DataFrame, threshold: float = 0.5) -> pd.DataFrame
 
 
 def _clean_single_file(
-    file_path: Path,
+    df: pd.DataFrame,
     cleaning_config: Any,
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
-    """Clean a single CSV file per cleaning configuration.
+    """Apply cleaning transformations to a DataFrame.
+
+    Args:
+        df: Raw DataFrame loaded by the caller.
+        cleaning_config: Validated CleaningConfig.
 
     Returns:
         Tuple of (cleaned DataFrame, stats dict).
     """
-    df = pd.read_csv(file_path)
     initial_shape = df.shape
 
     df = _apply_type_coercion(df)
     df = _drop_high_missing(df, threshold=0.5)
-
-    # Drop columns matching bad-imputation patterns from config
     df, pattern_dropped = drop_pattern_columns(df, cleaning_config.drop_column_patterns)
 
-    # Impute missing values using the configured strategy
     impute_fn = IMPUTE_REGISTRY.get(cleaning_config.impute_strategy, IMPUTE_REGISTRY["median"])
     df = impute_fn(df)
 
-    # Remove exact duplicate rows
     df = df.drop_duplicates()
 
     return df, {
@@ -87,7 +117,11 @@ def clean_raw_data(
     run_id: str,
     config_dir: str | Path = "config",
 ) -> dict[str, Any]:
-    """Clean raw CSV files: type coercion, imputation, deduplication.
+    """Clean raw data files: type coercion, imputation, deduplication.
+
+    Dispatches each file to a format-specific reader/writer based on extension.
+    Output format matches input format (CSV in → CSV out, Parquet in → Parquet out).
+    Currently supports: CSV, Parquet.
 
     Args:
         raw_dir: Base directory containing raw data.
@@ -117,15 +151,22 @@ def clean_raw_data(
     results: dict[str, Any] = {"run_id": run_id, "files": {}}
 
     for filename in manifest.get("files", {}):
-        if not filename.endswith(".csv"):
+        suffix = Path(filename).suffix.lower()
+        reader = READERS.get(suffix)
+        writer = WRITERS.get(suffix)
+        if reader is None or writer is None:
             continue
+
         file_path = raw_path / filename
         if not file_path.exists():
             continue
 
-        df, stats = _clean_single_file(file_path, cleaning_config)
+        df = reader(file_path)
+        df, stats = _clean_single_file(df, cleaning_config)
+
         output_path = interim_path / filename
-        df.to_csv(output_path, index=False)
+        writer(df, output_path)
+
         results["files"][filename] = {**stats, "output_path": str(output_path)}
         logger.info("Cleaned %s: %s → %s", filename, stats["initial_shape"], stats["final_shape"])
 

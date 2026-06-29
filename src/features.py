@@ -1,8 +1,9 @@
 """Feature engineering stage: encoding, Box-Cox, VIF pruning, scaling, train/test split."""
 import logging
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
+import numpy as np
 import pandas as pd
 import yaml
 from sklearn.model_selection import train_test_split
@@ -16,6 +17,23 @@ from src.utils.transforms import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _read_csv(file_path: Path) -> pd.DataFrame:
+    """Read a CSV file into a DataFrame."""
+    return pd.read_csv(file_path)
+
+
+def _read_parquet(file_path: Path) -> pd.DataFrame:
+    """Read a Parquet file into a DataFrame."""
+    return pd.read_parquet(file_path)
+
+
+# Maps file extension → reader. Output is always Parquet (train/test feature matrices).
+READERS: dict[str, Callable[[Path], pd.DataFrame]] = {
+    ".csv": _read_csv,
+    ".parquet": _read_parquet,
+}
 
 
 def _encode_columns(df: pd.DataFrame, encoding_map: dict[str, str]) -> pd.DataFrame:
@@ -103,10 +121,15 @@ def engineer_features(
 
     features_path.mkdir(parents=True, exist_ok=True)
 
-    # Load and combine all cleaned CSV files
-    dfs = [pd.read_csv(f) for f in interim_path.glob("*.csv")]
+    # Load and combine all supported files from interim dir
+    dfs = []
+    for f in sorted(interim_path.iterdir()):
+        reader = READERS.get(f.suffix.lower())
+        if reader is not None:
+            dfs.append(reader(f))
     if not dfs:
-        raise FileNotFoundError(f"No CSV files found in {interim_path}")
+        supported = sorted(READERS)
+        raise FileNotFoundError(f"No supported files found in {interim_path}. Supported: {supported}")
     df = pd.concat(dfs, axis=0, ignore_index=True)
 
     # Encode categorical columns per config strategy
@@ -121,10 +144,19 @@ def engineer_features(
     # NZV filter (protects target column)
     df = _apply_nzv_filter(df, features_config.nzv_threshold, exclude_cols=[target_col])
 
-    # Fill any remaining numeric NaN with median
+    # Replace inf with NaN, then fill NaN with column median
     for col in df.select_dtypes(include="number").columns:
+        df[col] = df[col].replace([np.inf, -np.inf], np.nan)
         if df[col].isna().any():
             df[col] = df[col].fillna(df[col].median())
+
+    # Drop columns that are still all-NaN (median was NaN, fill did nothing)
+    all_nan_cols = [
+        col for col in df.select_dtypes(include="number").columns if df[col].isna().all()
+    ]
+    if all_nan_cols:
+        logger.warning("Dropping %d all-NaN columns after imputation: %s", len(all_nan_cols), all_nan_cols)
+        df = df.drop(columns=all_nan_cols)
 
     transform_meta: dict[str, Any] = {}
 
@@ -134,6 +166,20 @@ def engineer_features(
         transform_meta["boxcox_lambda"] = lambda_val
         logger.info("Applied Box-Cox to target '%s': λ=%.4f", target_col, lambda_val)
 
+    # Final sweep: drop any predictor column still carrying NaN or inf before split.
+    # Catches non-numeric columns not in encoding_map and any edge cases above missed.
+    predictor_cols = [c for c in df.columns if c != target_col]
+    final_bad = [
+        c for c in predictor_cols
+        if df[c].isna().any() or (df[c].dtype.kind in "fc" and np.isinf(df[c]).any())
+    ]
+    if final_bad:
+        logger.warning(
+            "Final cleanup: dropping %d columns with NaN/inf before split: %s",
+            len(final_bad), final_bad,
+        )
+        df = df.drop(columns=final_bad)
+
     X = df.drop(columns=[target_col])
     y = df[target_col]
 
@@ -141,6 +187,14 @@ def engineer_features(
     vif_dropped: list[str] = []
     if features_config.vif_threshold is not None:
         numeric_X = X.select_dtypes(include="number")
+        # Guard: drop any column still carrying NaN or inf before passing to statsmodels
+        bad_cols = numeric_X.columns[
+            numeric_X.isin([np.inf, -np.inf]).any() | numeric_X.isna().any()
+        ].tolist()
+        if bad_cols:
+            logger.warning("Dropping %d columns with NaN/inf before VIF: %s", len(bad_cols), bad_cols)
+            numeric_X = numeric_X.drop(columns=bad_cols)
+            X = X.drop(columns=bad_cols)
         if not numeric_X.empty:
             pruned, vif_dropped = drop_high_vif(numeric_X, features_config.vif_threshold)
             X = X.drop(columns=vif_dropped)

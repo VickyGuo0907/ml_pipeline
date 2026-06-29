@@ -1,10 +1,27 @@
 """Data profiling stage using ydata-profiling."""
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import pandas as pd
 import yaml
 from ydata_profiling import ProfileReport
+
+
+def _read_csv(file_path: Path) -> pd.DataFrame:
+    """Read a CSV file into a DataFrame."""
+    return pd.read_csv(file_path)
+
+
+def _read_parquet(file_path: Path) -> pd.DataFrame:
+    """Read a Parquet file into a DataFrame."""
+    return pd.read_parquet(file_path)
+
+
+# Maps file extension → reader. Register new formats here without touching profile_raw_files.
+READERS: dict[str, Callable[[Path], pd.DataFrame]] = {
+    ".csv": _read_csv,
+    ".parquet": _read_parquet,
+}
 
 
 def profile_raw_files(
@@ -12,7 +29,11 @@ def profile_raw_files(
     run_id: str,
     reports_dir: str | Path = "reports",
 ) -> dict[str, Any]:
-    """Generate profiling reports for raw CSV files.
+    """Generate profiling reports for raw data files.
+
+    Dispatches each file to a format-specific reader based on extension,
+    then generates a ydata-profiling HTML report per file.
+    Currently supports: CSV, Parquet.
 
     Args:
         raw_dir: Base directory containing raw data
@@ -32,39 +53,36 @@ def profile_raw_files(
     if not manifest_path.exists():
         raise FileNotFoundError(f"Manifest not found: {manifest_path}")
 
-    # Create reports directory
     reports_path.mkdir(parents=True, exist_ok=True)
 
-    # Load manifest
     with open(manifest_path) as f:
         manifest = yaml.safe_load(f)
 
-    profiling_results = {
+    profiling_results: dict[str, Any] = {
         "run_id": run_id,
         "reports": {},
     }
 
-    # Profile each CSV file
     for filename in manifest.get("files", {}).keys():
-        if not filename.endswith(".csv"):
+        suffix = Path(filename).suffix.lower()
+        reader = READERS.get(suffix)
+        if reader is None:
             continue
 
         file_path = raw_path / filename
         if not file_path.exists():
             continue
 
-        # Load data
-        df = pd.read_csv(file_path)
+        df = reader(file_path)
 
-        # Generate profile report
         profile = ProfileReport(
             df,
             title=f"Data Profile: {filename}",
-            minimal=True,  # Use minimal mode for faster generation
+            minimal=True,
         )
 
-        # Save report
-        report_name = f"{run_id}_{filename.replace('.csv', '_profile.html')}"
+        stem = Path(filename).stem
+        report_name = f"{run_id}_{stem}_profile.html"
         report_path = reports_path / report_name
         profile.to_file(report_path)
 

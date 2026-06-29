@@ -9,7 +9,8 @@
 
                            ┌──────────────────────┐
                            │   Data Sources       │
-                           │  (CSV in landing/)   │
+                           │  (CSV/Parquet in     │
+                           │   landing/)          │
                            └──────────┬───────────┘
                                       │
                                       ▼
@@ -36,18 +37,18 @@
         │  DATA LAKE            │        │  ML Tracking │    │
         │  (Local Parquet)      │        │  (MLflow)    │    │
         │                       │        │              │    │
-        │ ├─ data/raw/          │        │ ├─ Postgres  │    │
-        │ │  2026-05-18/        │        │ ├─ Artifacts │    │
-        │ │  └─ *.csv           │        │ │  Registry  │    │
+        │ ├─ data/<pipeline>/raw/│        │ ├─ Postgres  │    │
+        │ │  <run_id>/          │        │ ├─ Artifacts │    │
+        │ │  └─ *.csv / *.parquet│        │ │  Registry  │    │
         │ │  └─ manifest.yaml   │        │ └─ Models    │    │
         │ │                     │        │   (linear)   │    │
-        │ ├─ data/interim/      │        │   (gbm)      │    │
-        │ │  2026-05-18/        │        │              │    │
-        │ │  └─ *.csv (clean)   │        └──────────────┘    │
+        │ ├─ data/<pipeline>/   │        │   (gbm)      │    │
+        │ │  interim/<run_id>/  │        │              │    │
+        │ │  └─ *.csv / *.parquet│       └──────────────┘    │
         │ │  └─ manifest.yaml   │                            │
         │ │                     │        ┌────────────────┐  │
-        │ ├─ data/features/     │        │  MONITORING    │  │
-        │ │  2026-05-18/        │        │  (Evidently)   │  │
+        │ ├─ data/<pipeline>/   │        │  MONITORING    │  │
+        │ │  features/<run_id>/ │        │  (Evidently)   │  │
         │ │  ├─ train.parquet   │        │                │  │
         │ │  ├─ test.parquet    │        │ └─ Drift       │  │
         │ │  └─ manifest.yaml   │        │    Reports     │  │
@@ -147,12 +148,12 @@
 ```
 STAGE 1: INGEST
 ───────────────────────────────────────────────────────
-data/landing/*.csv
+data/<pipeline>/landing/*.csv / *.parquet   (e.g. data/biomedical_clinical/landing/)
         │
-        ├─→ Read CSV files
+        ├─→ Read files (dispatcher: CSV, Parquet)
         ├─→ Compute SHA256 hashes
         ├─→ Create versioned directory
-        │   data/raw/2026-05-18/
+        │   data/<pipeline>/raw/<run_id>/
         │
         ├─→ Write manifest.yaml
         │   ├─ file sizes
@@ -164,7 +165,7 @@ data/landing/*.csv
 
 STAGE 2: VALIDATE_RAW
 ───────────────────────────────────────────────────────
-data/raw/2026-05-18/*.csv
+data/<pipeline>/raw/<run_id>/*.csv / *.parquet
         │
         ├─→ Load manifest
         ├─→ Apply Pandera schema
@@ -177,9 +178,9 @@ data/raw/2026-05-18/*.csv
 
 STAGE 3: PROFILE
 ───────────────────────────────────────────────────────
-data/raw/2026-05-18/*.csv
+data/<pipeline>/raw/<run_id>/*.csv / *.parquet
         │
-        ├─→ Load each CSV
+        ├─→ Load each file (dispatcher: CSV, Parquet)
         ├─→ Generate ydata-profiling reports
         │   ├─ Data types
         │   ├─ Missing values
@@ -191,7 +192,7 @@ data/raw/2026-05-18/*.csv
 
 STAGE 4: CLEAN
 ───────────────────────────────────────────────────────
-data/raw/2026-05-18/*.csv
+data/<pipeline>/raw/<run_id>/*.csv / *.parquet
         │
         ├─→ Type coercion
         │   └─ Convert numeric columns
@@ -202,15 +203,15 @@ data/raw/2026-05-18/*.csv
         ├─→ Deduplication
         │   └─ Remove exact duplicates
         │
-        ├─→ Write to interim
-        │   data/interim/2026-05-18/*.csv
+        ├─→ Write to interim (format preserved: CSV→CSV, Parquet→Parquet)
+        │   data/<pipeline>/interim/<run_id>/*.csv / *.parquet
         │
         └─→ Output: Cleaned data + manifest
 
 
 STAGE 5: FEATURE_ENGINEER
 ───────────────────────────────────────────────────────
-data/interim/2026-05-18/*.csv
+data/<pipeline>/interim/<run_id>/*.csv / *.parquet
         │
         ├─→ Load all cleaned files
         ├─→ Concatenate
@@ -232,7 +233,7 @@ data/interim/2026-05-18/*.csv
         │   ├─ Stratified on target
         │   └─ Save as Parquet
         │
-        ├─→ data/features/2026-05-18/
+        ├─→ data/<pipeline>/features/<run_id>/
         │   ├─ train.parquet
         │   ├─ test.parquet
         │   └─ manifest.yaml
@@ -242,7 +243,7 @@ data/interim/2026-05-18/*.csv
 
 STAGE 6: VALIDATE_FEATURES
 ───────────────────────────────────────────────────────
-data/features/2026-05-18/train.parquet
+data/<pipeline>/features/<run_id>/train.parquet
         │
         ├─→ Load feature matrix
         ├─→ Apply Pandera features schema
@@ -255,7 +256,7 @@ data/features/2026-05-18/train.parquet
 
 STAGE 7: TRAIN
 ───────────────────────────────────────────────────────
-data/features/2026-05-18/{train,test}.parquet
+data/<pipeline>/features/<run_id>/{train,test}.parquet
         │
         ├─→ Load config (models.yaml)
         │
@@ -303,7 +304,7 @@ MLflow runs (from train stage)
 
 STAGE 9: DRIFT_REPORT
 ───────────────────────────────────────────────────────
-data/features/2026-05-18/train.parquet
+data/<pipeline>/features/<run_id>/train.parquet
         │
         ├─→ Compare current to previous run
         │   (if previous_run_id available)
@@ -476,7 +477,7 @@ mlflow_run_ids (MLflow tracking)
 ```
 All pipeline orchestration and processing parameters are externalized to YAML configs.
 Configs are split into two layers: shared base defaults and per-pipeline config directories.
-dags/dag_factory.py discovers all pipeline directories and registers one Airflow DAG each.
+src/dags/dag_factory.py discovers all pipeline directories and registers one Airflow DAG each.
 
 config/base/defaults.yaml (shared across all pipelines)
 ├─ tasks: retry count, retry delay, per-task overrides
@@ -513,31 +514,31 @@ Benefits:
 ```
 Each stage writes manifest.yaml for data lineage:
 
-data/raw/2026-05-18/manifest.yaml
-├─ run_id: 2026-05-18
-├─ source_directory: data/landing
+data/biomedical_clinical/raw/<run_id>/manifest.yaml
+├─ run_id: <run_id>
+├─ source_directory: data/biomedical_clinical/landing
 ├─ files:
 │  ├─ hospital_compare_sample.csv
 │  │  ├─ size_bytes: 5847
 │  │  ├─ hash_sha256: a1b2c3...
 │  │  └─ timestamp: 2026-05-18T21:42:00
 
-data/interim/2026-05-18/manifest.yaml
-├─ run_id: 2026-05-18
+data/biomedical_clinical/interim/<run_id>/manifest.yaml
+├─ run_id: <run_id>
 ├─ stage: clean
 ├─ files:
 │  └─ hospital_compare_sample.csv
-│     └─ output_path: data/interim/2026-05-18/...
+│     └─ output_path: data/biomedical_clinical/interim/<run_id>/...
 
-data/features/2026-05-18/manifest.yaml
-├─ run_id: 2026-05-18
+data/biomedical_clinical/features/<run_id>/manifest.yaml
+├─ run_id: <run_id>
 ├─ stage: feature_engineer
 ├─ train:
-│  ├─ path: data/features/2026-05-18/train.parquet
+│  ├─ path: data/biomedical_clinical/features/<run_id>/train.parquet
 │  ├─ rows: 16
 │  └─ columns: 26
 ├─ test:
-│  ├─ path: data/features/2026-05-18/test.parquet
+│  ├─ path: data/biomedical_clinical/features/<run_id>/test.parquet
 │  ├─ rows: 4
 │  └─ columns: 26
 ```
@@ -611,7 +612,7 @@ This prevents surprises in production.
 │ FAILURE SCENARIOS & RECOVERY                         │
 ├──────────────────────────────────────────────────────┤
 │                                                      │
-│ Scenario: CSV file missing in data/landing           │
+│ Scenario: No supported files in data/<pipeline>/landing│
 │ ─────────────────────────────────────────────        │
 │ └─→ ingest_files() raises FileNotFoundError          │
 │     └─→ Task marked FAILED                           │
@@ -634,7 +635,7 @@ This prevents surprises in production.
 │                                                      │
 │ Scenario: Partition too large for memory             │
 │ ─────────────────────────────────────────────        │
-│ └─→ Pandas read_csv() raises MemoryError             │
+│ └─→ Dispatcher reader raises MemoryError             │
 │     └─→ Task marked FAILED                           │
 │     └─→ Review data size, increase container memory  │
 │                                                      │
@@ -663,7 +664,7 @@ LOCAL DEVELOPMENT (Current)
 │ ├─ MLflow                                │
 │ └─ FastAPI                               │
 ├─ Bind-mounted volumes                    │
-│  ├─ data/landing, raw, interim, features │
+│  ├─ data/<pipeline>/{landing,raw,interim,features} │
 │  ├─ mlflow-artifacts                     │
 │  └─ reports                              │
 └─ All services on single machine          │

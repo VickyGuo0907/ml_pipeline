@@ -135,7 +135,8 @@ class OrchestrationDAGConfig(BaseModel):
         default="End-to-end ML pipeline: ingest → train → serve",
         description="DAG description",
     )
-    schedule_interval: str = Field(default="@weekly", description="Schedule interval")
+    start_date: str = Field(default="2024-01-01", description="DAG start date (YYYY-MM-DD)")
+    schedule: str = Field(default="@weekly", description="DAG schedule (cron or preset)")
     catchup: bool = Field(default=False, description="Enable catchup")
     tags: list[str] = Field(default_factory=lambda: ["ml", "production"], description="DAG tags")
 

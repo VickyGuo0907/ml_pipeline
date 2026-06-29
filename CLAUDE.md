@@ -28,11 +28,11 @@ Build an end-to-end ML pipeline POC on local docker-compose, designed to demonst
 - **Host OS:** macOS
 
 ## Pipeline stages (8, one DAG)
-1. ingest — move files from data/landing to data/raw/<run_id>, write manifest.yaml with checksums
+1. ingest — move files from data/<pipeline>/landing to data/<pipeline>/raw/<run_id>, write manifest.yaml with checksums
 2. validate_raw — pandera schema check per source file
 3. profile — ydata-profiling HTML report per source
-4. clean — type coercion, missing handling, dedup → data/interim/<run_id>/*.parquet
-5. feature_engineer — joins, encoding, NZV filter, train/test split → data/features/<run_id>/{train,test}.parquet
+4. clean — type coercion, missing handling, dedup → data/<pipeline>/interim/<run_id>/*.parquet
+5. feature_engineer — joins, encoding, NZV filter, train/test split → data/<pipeline>/features/<run_id>/{train,test}.parquet
 6. validate_features — pandera schema check on feature matrix
 7. train — sklearn + lightgbm, MLflow autolog, both models per run
 8. evaluate_and_register — compute metrics, register to MLflow Staging
@@ -48,8 +48,9 @@ ml-pipeline/
 ├── README.md
 ├── pyproject.toml
 ├── uv.lock
-├── dags/dag_factory.py
 ├── src/
+│   ├── dags/dag_factory.py
+│   ├── scripts/diagnose_pipeline.py, analyze_models.py
 │   ├── ingest.py, validate.py, profile.py, clean.py
 │   ├── features.py, train.py, evaluate.py, register.py
 │   ├── serve.py, monitoring.py
@@ -59,7 +60,9 @@ ml-pipeline/
 │   ├── base/defaults.yaml
 │   ├── biomedical_clinical/{orchestration.yaml, pipeline.yaml, cleaning.yaml, features.yaml, models.yaml}
 │   └── bioinfo_gene/{orchestration.yaml, pipeline.yaml, cleaning.yaml, features.yaml, models.yaml}
-├── data/{landing,raw,interim,features}/
+├── data/
+│   ├── biomedical_clinical/{landing,raw,interim,features}/
+│   └── bioinfo_gene/{landing,raw,interim,features}/
 ├── mlflow-artifacts/
 ├── reports/
 ├── tests/{test_schemas.py, test_clean.py, test_features.py, test_integration.py}
@@ -75,7 +78,7 @@ ml-pipeline/
 Two Postgres instances to avoid schema mixing. FastAPI mounts mlflow-artifacts as read-only.
 
 ## Sample dataset
-CMS Hospital Compare CSVs. Multi-file, real, messy. Files in data/landing/.
+CMS Hospital Compare CSVs. Multi-file, real, messy. Files in data/biomedical_clinical/landing/.
 Target column for the demo run: ExcessReadmissionRatio for pneumonia (continuous regression).
 Predictors include quality measures, HCAHPS scores, and hospital info — see previous R-based exploration that produced a 4,802 × 30 feature matrix.
 

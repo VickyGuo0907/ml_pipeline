@@ -22,10 +22,10 @@ Improvement = (Baseline - Model) / Baseline × 100%
 
 ```bash
 # Full diagnostics report
-python3 scripts/diagnose_pipeline.py
+python3 src/scripts/diagnose_pipeline.py
 
 # Model performance analysis
-python3 scripts/analyze_models.py
+python3 src/scripts/analyze_models.py
 
 # Or in Docker environment
 docker-compose exec airflow-scheduler python3 /path/to/script.py
@@ -38,16 +38,16 @@ docker-compose exec airflow-scheduler python3 /path/to/script.py
 **What to check:**
 ```python
 # Check ingested files exist
-ls -lh data/raw/$(date +%Y-%m-%d)/
+ls -lh data/biomedical_clinical/raw/$(date +%Y-%m-%d)/
 
 # Verify manifest file
-cat data/raw/$(date +%Y-%m-%d)/manifest.yaml
+cat data/biomedical_clinical/raw/$(date +%Y-%m-%d)/manifest.yaml
 ```
 
 **Common issues:**
-- Files not found in `data/landing/` → Add CSV files
+- Files not found in `data/biomedical_clinical/landing/` → Add CSV or Parquet files
 - Manifest missing → Check ingest task logs
-- Wrong file format → Ensure CSV files
+- Wrong file format → Ensure supported format (CSV or Parquet)
 
 ### Stage 2: Raw Data Validation (`02_validate_raw_schema`)
 
@@ -57,7 +57,7 @@ import pandas as pd
 from src.schemas.raw import raw_schema
 
 # Load raw data
-df = pd.read_parquet("data/raw/2026-05-19/hospital_data.parquet")
+df = pd.read_parquet("data/biomedical_clinical/raw/2026-05-19/hospital_data.parquet")
 
 # Validate schema
 raw_schema.validate(df)  # Raises if invalid
@@ -93,7 +93,7 @@ import pandas as pd
 from src.utils import load_cleaning_config
 
 config = load_cleaning_config()
-interim_df = pd.read_parquet("data/interim/2026-05-19/hospital_data.parquet")
+interim_df = pd.read_parquet("data/biomedical_clinical/interim/2026-05-19/hospital_data.parquet")
 
 # Check shape after cleaning
 print(f"Rows remaining: {len(interim_df)}")
@@ -111,8 +111,8 @@ print(f"Nulls: {interim_df.isnull().sum().sum()}")
 ```python
 import pandas as pd
 
-train_df = pd.read_parquet("data/features/2026-05-19/train.parquet")
-test_df = pd.read_parquet("data/features/2026-05-19/test.parquet")
+train_df = pd.read_parquet("data/biomedical_clinical/features/2026-05-19/train.parquet")
+test_df = pd.read_parquet("data/biomedical_clinical/features/2026-05-19/test.parquet")
 
 # Check feature distributions
 print(train_df.describe())
@@ -138,7 +138,7 @@ print(f"Test shape: {test_df.shape}")
 from src.schemas.features import features_schema
 import pandas as pd
 
-df = pd.read_parquet("data/features/2026-05-19/train.parquet")
+df = pd.read_parquet("data/biomedical_clinical/features/2026-05-19/train.parquet")
 features_schema.validate(df)  # Raises if invalid
 ```
 

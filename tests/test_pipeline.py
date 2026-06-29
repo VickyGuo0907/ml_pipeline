@@ -69,14 +69,54 @@ class TestIngest:
                     raw_dir=Path(tmpdir) / "raw",
                 )
 
-    def test_ingest_raises_on_no_csv_files(self):
-        """Test that ingest raises if no CSV files found."""
+    def test_ingest_raises_on_no_supported_files(self):
+        """Test that ingest raises if no supported files found."""
         with tempfile.TemporaryDirectory() as tmpdir:
             landing_dir = Path(tmpdir) / "landing"
             landing_dir.mkdir()
 
-            with pytest.raises(ValueError, match="No CSV files"):
+            with pytest.raises(ValueError, match="No supported files"):
                 ingest_files(landing_dir, Path(tmpdir) / "raw")
+
+    def test_ingest_parquet_files(self):
+        """Test that ingest handles Parquet files and records correct format in manifest."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            landing_dir = Path(tmpdir) / "landing"
+            raw_dir = Path(tmpdir) / "raw"
+            landing_dir.mkdir()
+
+            df = pd.DataFrame({"col1": [1, 2, 3], "col2": ["a", "b", "c"]})
+            df.to_parquet(landing_dir / "test.parquet", index=False)
+
+            result = ingest_files(landing_dir=landing_dir, raw_dir=raw_dir, run_id="2026-05-18")
+
+            assert result["file_count"] == 1
+            assert (raw_dir / "2026-05-18" / "test.parquet").exists()
+
+            import yaml
+            with open(result["manifest_path"]) as f:
+                manifest = yaml.safe_load(f)
+
+            assert "test.parquet" in manifest["files"]
+            assert manifest["files"]["test.parquet"]["format"] == "parquet"
+            assert "hash_sha256" in manifest["files"]["test.parquet"]
+
+    def test_ingest_mixed_csv_and_parquet(self):
+        """Test that ingest handles a landing dir with both CSV and Parquet files."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            landing_dir = Path(tmpdir) / "landing"
+            raw_dir = Path(tmpdir) / "raw"
+            landing_dir.mkdir()
+
+            df = pd.DataFrame({"col1": [1, 2]})
+            df.to_csv(landing_dir / "data.csv", index=False)
+            df.to_parquet(landing_dir / "data.parquet", index=False)
+
+            result = ingest_files(landing_dir=landing_dir, raw_dir=raw_dir, run_id="2026-05-18")
+
+            assert result["file_count"] == 2
+            assert (raw_dir / "2026-05-18" / "data.csv").exists()
+            assert (raw_dir / "2026-05-18" / "data.parquet").exists()
 
     def test_compute_file_hash(self):
         """Test file hashing for integrity."""

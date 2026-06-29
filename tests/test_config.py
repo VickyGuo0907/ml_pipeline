@@ -85,7 +85,7 @@ def test_load_pipeline_orchestration_config_merges_defaults():
     )
     assert isinstance(config, OrchestrationConfig)
     assert config.dag.dag_id == "biomedical_clinical_pipeline"
-    assert config.dag.schedule_interval == "@weekly"
+    assert config.dag.schedule == "@weekly"
     # Base defaults applied
     assert config.tasks.retries == 1
     assert config.mlflow.tracking_uri == "http://mlflow-server:5000"
@@ -100,7 +100,7 @@ def test_load_bioinfo_gene_orchestration_config():
         base_dir="config/base",
     )
     assert config.dag.dag_id == "bioinfo_gene_pipeline"
-    assert config.dag.schedule_interval == "@monthly"
+    assert config.dag.schedule == "@monthly"
     assert config.tasks.retries == 1  # inherited from base
 
 
