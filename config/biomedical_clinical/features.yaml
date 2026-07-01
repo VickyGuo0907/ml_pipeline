@@ -1,40 +1,45 @@
 # Healthcare pipeline feature engineering config
-# SVG Stage 2: Transformation, Scaling & Feature Reduction
+# Matches Demo_1: readmissions (PN filter) spine + HCAHPS pivot-join
 
-# Column encoding strategies
-# SVG: "Freq encode State — 52 levels → numeric"
-# Options per column: frequency | label | one_hot | ordinal
+# Multi-source assembly: filter spine to PN, pivot HCAHPS wide, join on Facility ID
+join_strategy:
+  enabled: true
+  id_column: "Facility ID"
+  spine:
+    file_pattern: "FY_2024_Hospital_Readmissions_Reduction_Program"
+    measure_column: "Measure Name"
+    measure_value: "READM-30-PN-HRRP"
+  pivots:
+    - file_pattern: "HCAHPS"
+      measure_column: "HCAHPS Question"
+      measure_filter: "linear mean score"
+      value_column: "HCAHPS Linear Mean Value"
+      strip_suffix: " - linear mean score"
+
+# Encoding applied after pivot-join
 encoding:
   "State": "frequency"
-  "Facility Name": "label"
-  "Measure Name": "label"
 
-steps:
-  - name: "encode_categorical"
-    type: "encode"
-    source_columns: ["Facility Name", "State", "Measure Name"]
-    operation: "encode"
-    params:
-      handle_unknown: "use_encoded_value"
-      unknown_value: -1
+steps: []
 
-# SVG Stage 2: "Box-Cox transform — λ = -0.3 on target"
-# Fitted on the full dataset before train/test split
+# SVG Stage 2: Box-Cox transform on ExcessReadmissionRatio target
 boxcox_target: true
 
-# SVG Stage 2: "VIF cleanup — Drop 5 HCAHPS > 5"
-# Iteratively drops the highest-VIF predictor until all VIF ≤ threshold
-# Set to null to disable VIF filtering
-vif_threshold: 5.0
+# VIF disabled for this pipeline — HCAHPS survey questions are correlated by design
+# and Demo_1 does not apply VIF pruning
+vif_threshold: null
 
-# Near-zero variance filtering (remove features where 95%+ values are the same)
+# Near-zero variance filter (removes features where >=95% of values are identical)
 nzv_threshold: 0.95
 
-# Columns to drop after encoding
+# Drop modeling-specific columns not needed in the feature matrix.
+# Metadata columns (Footnote, Start/End Date, Facility Name) are already
+# removed at the clean stage; only join keys and leakage columns remain here.
 drop_columns:
-  - "Footnote"
-  - "Start Date"
-  - "End Date"
+  - "Facility ID"
+  - "Measure Name"
+  - "Number of Readmissions"
+  - "Predicted Readmission Rate"
+  - "Expected Readmission Rate"
 
-# Standardize all numeric features (SVG Stage 2: "Center & scale")
 scale: true

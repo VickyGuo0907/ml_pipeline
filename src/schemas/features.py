@@ -1,16 +1,20 @@
-"""Pandera schema for feature matrix used in model training.
-
-Different datasets produce different features. This schema validates only
-the common structure and presence of the target column.
-"""
+"""Pandera schema factory for feature matrix validation."""
 from pandera import Column, DataFrameSchema, Index
 
-features_schema = DataFrameSchema(
-    columns={
-        # Target variable - must be numeric, nullable to handle missing values
-        "Excess Readmission Ratio": Column(float, nullable=True),
-    },
-    index=Index(int, nullable=False),
-    strict=False,  # Allow any features beyond the target
-    coerce=True,
-)
+
+def build_features_schema(target_col: str) -> DataFrameSchema:
+    """Build a feature validation schema driven by the pipeline target column.
+
+    Args:
+        target_col: Target column name from pipeline.yaml (e.g. 'Excess Readmission Ratio').
+
+    Returns:
+        DataFrameSchema that checks the target is a nullable float; strict=False
+        allows any additional predictor columns without listing them explicitly.
+    """
+    return DataFrameSchema(
+        columns={target_col: Column(float, nullable=True)},
+        index=Index(int, nullable=False),
+        strict=False,
+        coerce=True,
+    )

@@ -31,6 +31,55 @@ class SourceConfig(BaseModel):
     format: str = Field(default="csv", description="Data format (csv, parquet, etc)")
 
 
+class ColumnBoundsConfig(BaseModel):
+    """Min/max numeric bounds for a single column."""
+
+    min: float | None = Field(default=None, description="Inclusive lower bound")
+    max: float | None = Field(default=None, description="Inclusive upper bound")
+
+
+class PerFileSchemaConfig(BaseModel):
+    """Schema rules applied to a single file matched by filename substring."""
+
+    file_pattern: str = Field(description="Substring matched against filename — first match wins")
+    required_columns: list[str] = Field(
+        default_factory=list, description="Columns that must exist and be non-null in this file"
+    )
+    numeric_bounds: dict[str, ColumnBoundsConfig] = Field(
+        default_factory=dict, description="Per-column inclusive numeric range checks for this file"
+    )
+    min_rows: int = Field(default=1, ge=1, description="Minimum row count for this file")
+
+
+class ValidationConfig(BaseModel):
+    """Raw data validation rules applied at Stage 2."""
+
+    required_columns: list[str] = Field(
+        default_factory=list, description="Columns that must exist and be non-null in every file (global fallback)"
+    )
+    numeric_bounds: dict[str, ColumnBoundsConfig] = Field(
+        default_factory=dict, description="Per-column inclusive numeric range checks (global fallback)"
+    )
+    min_rows: int = Field(default=1, ge=1, description="Minimum row count per file (global fallback)")
+    per_file_schemas: list[PerFileSchemaConfig] = Field(
+        default_factory=list,
+        description="File-specific schema rules matched by filename substring; override global rules when matched",
+    )
+    sentinel_values: list[str] = Field(
+        default_factory=list,
+        description="Strings in raw files that mean 'missing' (e.g. 'Not Available'). Replaced with NaN at validation and cleaning stages.",
+    )
+
+
+class ProfilingConfig(BaseModel):
+    """ydata-profiling settings for Stage 3."""
+
+    minimal: bool = Field(
+        default=True,
+        description="True = fast minimal report; False = full report with interactions and KDE curves",
+    )
+
+
 class PipelineConfig(BaseModel):
     """Root pipeline configuration."""
 
@@ -41,6 +90,12 @@ class PipelineConfig(BaseModel):
     random_state: int = Field(default=42)
     # Identifies the pipeline variant — used for logging/tagging, not logic branching
     pipeline_type: str = Field(default="generic", description="Pipeline variant identifier")
+    validation: ValidationConfig = Field(
+        default_factory=ValidationConfig, description="Raw validation rules for Stage 2"
+    )
+    profiling: ProfilingConfig = Field(
+        default_factory=ProfilingConfig, description="ydata-profiling settings for Stage 3"
+    )
 
     @field_validator("sources")
     @classmethod
@@ -74,6 +129,10 @@ class CleaningConfig(BaseModel):
     duplicates_subset: Optional[list[str]] = Field(
         default=None, description="Columns to check for duplicates"
     )
+    protect_columns: list[str] = Field(
+        default_factory=list,
+        description="Columns excluded from the high-missing-value drop (useful for sparse pivot-join columns)",
+    )
 
 
 class FeatureEngineeringStep(BaseModel):
@@ -84,6 +143,33 @@ class FeatureEngineeringStep(BaseModel):
     source_columns: list[str] = Field(..., description="Input columns")
     operation: str = Field(..., description="Operation to perform")
     params: dict[str, Any] = Field(default_factory=dict, description="Operation parameters")
+
+
+class JoinSpineConfig(BaseModel):
+    """Config for the spine (primary) file in a pivot-join feature assembly."""
+
+    file_pattern: str = Field(description="Substring matched against filename to identify the spine file")
+    measure_column: str | None = Field(default=None, description="Column to filter rows on")
+    measure_value: str | None = Field(default=None, description="Value to keep in measure_column")
+
+
+class JoinPivotConfig(BaseModel):
+    """Config for a side file that gets filtered, pivoted wide, then joined to the spine."""
+
+    file_pattern: str = Field(description="Substring matched against filename to identify this pivot file")
+    measure_column: str = Field(description="Column whose distinct values become column headers after pivot")
+    measure_filter: str = Field(description="Substring used to filter measure_column rows before pivoting")
+    value_column: str = Field(description="Column containing numeric values to fill the pivot table")
+    strip_suffix: str = Field(default="", description="Suffix stripped from measure names when naming pivot columns")
+
+
+class JoinStrategyConfig(BaseModel):
+    """Multi-source pivot-join config for building wide feature matrices from long-format files."""
+
+    enabled: bool = Field(default=False, description="Enable pivot-join assembly; False falls back to naive concat")
+    id_column: str = Field(default="Facility ID", description="Column used as join key across all sources")
+    spine: JoinSpineConfig | None = Field(default=None, description="Primary file that provides the target and row count")
+    pivots: list[JoinPivotConfig] = Field(default_factory=list, description="Side files to pivot wide and left-join onto the spine")
 
 
 class FeaturesConfig(BaseModel):
@@ -105,6 +191,10 @@ class FeaturesConfig(BaseModel):
     # SVG Stage 2: drop predictors with VIF > threshold; None disables
     vif_threshold: Optional[float] = Field(
         default=None, description="VIF threshold for collinearity pruning; None = disabled"
+    )
+    join_strategy: JoinStrategyConfig = Field(
+        default_factory=JoinStrategyConfig,
+        description="Multi-source pivot-join config; disabled by default (falls back to naive concat)",
     )
 
 
@@ -158,6 +248,10 @@ class OrchestrationDirectoriesConfig(BaseModel):
     features: str = Field(default="data/features", description="Features directory")
     reports: str = Field(default="reports", description="Reports directory")
     config: str = Field(default="config", description="Configuration directory")
+    reports_base_url: str = Field(
+        default="http://localhost:8888",
+        description="Base URL for the reports nginx server (used for Airflow doc_md links)",
+    )
 
 
 class OrchestrationMLflowConfig(BaseModel):

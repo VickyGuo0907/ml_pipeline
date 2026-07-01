@@ -28,7 +28,7 @@ python3 src/scripts/diagnose_pipeline.py
 python3 src/scripts/analyze_models.py
 
 # Or in Docker environment
-docker-compose exec airflow-scheduler python3 /path/to/script.py
+docker compose exec airflow-scheduler python3 /path/to/script.py
 ```
 
 ## Pipeline Stages & Debugging
@@ -54,30 +54,34 @@ cat data/biomedical_clinical/raw/$(date +%Y-%m-%d)/manifest.yaml
 **What to check:**
 ```python
 import pandas as pd
-from src.schemas.raw import raw_schema
+from src.utils.config import load_pipeline_config
 
-# Load raw data
-df = pd.read_parquet("data/biomedical_clinical/raw/2026-05-19/hospital_data.parquet")
+cfg = load_pipeline_config("config/biomedical_clinical")
+print("Sentinels:", cfg.validation.sentinel_values)
+print("Per-file schemas:", cfg.validation.per_file_schemas)
 
-# Validate schema
-raw_schema.validate(df)  # Raises if invalid
+df = pd.read_csv("data/biomedical_clinical/raw/2026-06-29/FY_2024_Hospital_Readmissions_Reduction_Program_Hospital.csv")
+print(df.shape, df.columns.tolist())
 ```
 
 **Common issues:**
-- Schema mismatch → Check column names/types in config
-- Extra/missing columns → Verify source data
-- Data type errors → Check type coercion in cleaning stage
+- Sentinel strings not replaced → Check `validation.sentinel_values` in `pipeline.yaml`
+- Required column missing → Check `per_file_schemas` in `pipeline.yaml` for that file's pattern
+- Row count below minimum → Check `min_rows` in the matching `per_file_schemas` entry
+- Data type errors → Sentinel replacement must happen before numeric coercion
 
 ### Stage 3: Data Profiling (`03_profile_data`)
 
 **What to check:**
 ```bash
-# Open generated reports
-open reports/2026-05-19_hospital_data.html
+# Browse all reports in the reports server
+open http://localhost:8888/biomedical_clinical/
 
-# Check report directory
-ls -lh reports/*.html
+# Or list files directly
+ls -lh reports/biomedical_clinical/*.html
 ```
+
+In the Airflow UI, click the `03_profile_data` task instance → **Docs** tab → "Open reports →" link.
 
 **What to look for:**
 - Missing values percentages
@@ -127,9 +131,12 @@ print(f"Test shape: {test_df.shape}")
 ```
 
 **Common issues:**
-- Nulls in engineered features → Check feature.yaml transforms
-- Different feature sets → Ensure both train/test get same features
-- Leakage → Target info shouldn't be in features
+- Nulls in engineered features → Check `features.yaml` transforms and `protect_columns` in `cleaning.yaml`
+- Pivot-join produces empty result → Verify `spine.file_pattern` matches actual interim filename
+- Too few features after NZV filter → Lower `nzv_threshold` in `features.yaml`
+- VIF prunes too aggressively → Set `vif_threshold: null` for datasets with correlated predictors (e.g. survey data)
+- Different feature sets train vs test → Train/test split happens after all transforms, so this shouldn't occur
+- Leakage → Target column must not appear in predictors; check `drop_columns` in `features.yaml`
 
 ### Stage 6: Feature Validation (`06_validate_features_schema`)
 
@@ -212,12 +219,14 @@ for m in models:
 
 **What to check:**
 ```bash
-# Check generated drift reports
-ls -lh reports/*drift*.html
+# Browse drift reports in the reports server
+open http://localhost:8888/biomedical_clinical/
 
-# Open report
-open reports/2026-05-19_baseline_drift_report.html
+# Or list directly
+ls -lh reports/biomedical_clinical/*drift*.html
 ```
+
+In the Airflow UI, click the `09_drift_report` task instance → **Docs** tab → "Open reports →" link.
 
 **What to look for:**
 - Dataset drift detected → Features distribution changed
@@ -367,26 +376,26 @@ for run in runs[:3]:
 
 ```bash
 # Airflow scheduler logs
-docker-compose logs -f airflow-scheduler | grep -i error
+docker compose logs -f airflow-scheduler | grep -i error
 
 # MLflow server logs
-docker-compose logs -f mlflow-server
+docker compose logs -f mlflow-server
 
 # All services
-docker-compose logs -f
+docker compose logs -f
 ```
 
 ### Restart everything:
 
 ```bash
 # Stop all services
-docker-compose down
+docker compose down
 
 # Rebuild and restart
-docker-compose up -d
+docker compose up -d
 
 # Check health
-docker-compose ps
+docker compose ps
 ```
 
 ## Reference Metrics

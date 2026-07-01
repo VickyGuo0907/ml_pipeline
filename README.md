@@ -18,22 +18,23 @@ End-to-end machine learning pipeline demonstrating orchestration, validation, tr
 
 2. **Start all services:**
    ```bash
-   docker-compose up -d
+   docker compose up -d
    ```
 
 3. **Verify services are healthy:**
    ```bash
-   docker-compose ps
+   docker compose ps
    ```
 
-   All 7 services should show `Healthy` or `Running`:
+   All 8 services should show `Healthy` or `Running`:
    - Airflow Postgres (5432)
    - MLflow Postgres (5433)
    - Airflow Webserver (8080)
    - Airflow Scheduler
    - Airflow Triggerer
-   - MLflow Server (5000)
+   - MLflow Server (5001)
    - FastAPI Server (8000)
+   - Reports Server (8888)
 
 4. **Install dependencies:**
    ```bash
@@ -45,8 +46,9 @@ End-to-end machine learning pipeline demonstrating orchestration, validation, tr
 | Service | URL | Login |
 |---------|-----|-------|
 | Airflow | http://localhost:8080 | airflow / airflow |
-| MLflow | http://localhost:5000 | N/A |
+| MLflow | http://localhost:5001 | N/A |
 | FastAPI | http://localhost:8000/docs | N/A |
+| Reports | http://localhost:8888 | N/A |
 
 ## Pipeline Architecture
 
@@ -94,10 +96,10 @@ mlflow-artifacts/
 All config in `config/` directory, validated via Pydantic models:
 
 - `config/base/defaults.yaml` — Shared defaults (retries, MLflow URI) inherited by all pipelines
-- `config/<pipeline>/orchestration.yaml` — Per-pipeline DAG settings (dag_id, schedule, directories)
-- `config/<pipeline>/pipeline.yaml` — Sources, target, problem type, split ratio
-- `config/<pipeline>/cleaning.yaml` — Data cleaning recipes (type coercion, missing handling, dedup)
-- `config/<pipeline>/features.yaml` — Feature engineering (encoding, polynomial features, scaling)
+- `config/<pipeline>/orchestration.yaml` — Per-pipeline DAG settings (dag_id, schedule, directories, `reports_base_url`)
+- `config/<pipeline>/pipeline.yaml` — Sources, target, problem type, split ratio; `validation.sentinel_values` (dataset-specific missing-value strings); `validation.per_file_schemas` (per-file required columns and bounds)
+- `config/<pipeline>/cleaning.yaml` — Data cleaning recipes (impute strategy, protect columns, drop patterns)
+- `config/<pipeline>/features.yaml` — Feature engineering (encoding, join strategy, NZV filter, VIF threshold, scaling)
 - `config/<pipeline>/models.yaml` — Model hyperparameters (linear, LightGBM)
 
 Active pipelines: `biomedical_clinical` (@weekly), `bioinfo_gene` (@monthly).
@@ -110,15 +112,8 @@ Active pipelines: `biomedical_clinical` (@weekly), `bioinfo_gene` (@monthly).
 
 Unit tests:
 ```bash
-# Unit tests + config validation (requires venv/uv)
 uv sync
-uv run pytest tests/test_config.py -v
-
-# Schema validation tests
-uv run pytest tests/test_schemas.py -v
-
-# Serving tests
-uv run pytest tests/test_serve.py -v
+uv run pytest tests/test_pipeline.py -v   # 31 tests: config, validate, clean, features, profile
 ```
 
 The TESTING.md guide covers:
@@ -143,7 +138,7 @@ python3 src/scripts/diagnose_pipeline.py
 python3 src/scripts/analyze_models.py
 
 # Or in Docker environment
-docker-compose exec airflow-scheduler python3 /path/to/script.py
+docker compose exec airflow-scheduler python3 /path/to/script.py
 ```
 
 The DIAGNOSTICS.md guide covers:
@@ -167,13 +162,13 @@ The DIAGNOSTICS.md guide covers:
 
 #### Monitoring
 
-- **MLflow Tracking:** http://localhost:5000 — browse runs, metrics, artifacts
-- **Drift Reports:** Check `reports/` directory after `drift_report` task completes
+- **MLflow Tracking:** http://localhost:5001 — browse runs, metrics, artifacts
+- **Profile & Drift Reports:** http://localhost:8888 — nginx directory listing; tasks `03_profile_data`, `06b_unsupervised_explore`, and `09_drift_report` each have a "Docs" tab with a direct link
 - **Logs:** `docker logs airflow-scheduler` or Airflow UI task logs
 
 ## Stack
 
-- **Orchestration:** Apache Airflow 2.10 (LocalExecutor)
+- **Orchestration:** Apache Airflow 3 (LocalExecutor)
 - **Data Validation:** Pandera (schemas at boundaries)
 - **Profiling:** ydata-profiling (per-source HTML reports)
 - **Modeling:** scikit-learn (linear) + LightGBM (gradient boosting)
@@ -196,20 +191,24 @@ Place CSV or Parquet files in `data/biomedical_clinical/landing/` before running
 ## Key Design Decisions
 
 1. **One DAG, task groups:** Single orchestration DAG with 9 task groups for clarity
-2. **Manifest versioning:** `manifest.yaml` at each storage boundary (ingest, clean, features)
-3. **Pandera schemas:** Strict validation at raw → clean → features → train
-4. **No auto-promotion:** Manual MLflow UI click to move models to Production
-5. **LocalExecutor:** Single-machine orchestration (suitable for POC)
-6. **Separate Postgres:** Airflow metadata and MLflow tracking use distinct databases
-7. **Read-only MLflow artifacts:** FastAPI mounts artifacts as read-only
-8. **On-demand drift:** Drift monitoring runs inside training DAG as final task
+2. **Manifest versioning:** `src/utils/manifest.py` helpers write `manifest.yaml` at every storage boundary (ingest, clean, features); no stage duplicates this logic
+3. **Pandera schemas:** Config-driven validation at raw boundaries; `per_file_schemas` in `pipeline.yaml` allows per-file required columns and bounds without touching Python
+4. **Config-driven sentinel values:** Dataset-specific missing-value strings (e.g. "Not Available") declared in `pipeline.yaml` under `validation.sentinel_values`; both Stage 2 (validate) and Stage 4 (clean) read from the same source
+5. **Pivot-join feature assembly:** `features.yaml` join strategy config filters and pivots multi-source files onto a spine; no code changes needed to add join sources
+6. **VIF pruning is optional:** Set `vif_threshold: null` in `features.yaml` to skip VIF pruning for datasets with intentionally correlated predictors (e.g. HCAHPS survey questions)
+7. **No auto-promotion:** Manual MLflow UI click to move models to Production
+8. **LocalExecutor:** Single-machine orchestration (suitable for POC)
+9. **Separate Postgres:** Airflow metadata and MLflow tracking use distinct databases
+10. **Read-only MLflow artifacts:** FastAPI mounts artifacts as read-only
+11. **On-demand drift:** Drift monitoring runs inside training DAG as final task
+12. **Reports server:** nginx container at `:8888` serves `reports/` with directory listing; URL per pipeline set in `orchestration.yaml` (`reports_base_url`); Airflow task "Docs" tab links directly to it
 
 ## Troubleshooting
 
 ### Airflow webserver not accessible
 ```bash
 docker logs airflow-webserver
-docker-compose restart airflow-webserver
+docker compose restart airflow-webserver
 ```
 
 ### MLflow models not visible

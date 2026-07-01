@@ -16,7 +16,7 @@
                                       ▼
         ┌────────────────────────────────────────────────────────────┐
         │                    ORCHESTRATION LAYER                     │
-        │                    (Apache Airflow 3)                      │
+        │                    (Apache Airflow 3, LocalExecutor)        │
         │  ┌──────────────────────────────────────────────────────┐  │
         │  │  dag_factory → one DAG per config/pipelines/ dir     │  │
         │  │  ┌─────────┬──────────┬─────────┬───────┬──────────┐ │  │
@@ -54,10 +54,13 @@
         │ │  └─ manifest.yaml   │        │    Reports     │  │
         │ │                     │        │    (HTML)      │  │
         │ └─ reports/           │        └────────────────┘  │
-        │    └─ *.html          │                            │
-        │       (profiling,     │                            │
-        │        drift)         │                            │
-        └───────────────────────┘                            │
+        │    └─ <pipeline>/     │                            │
+        │       *.html          │   ┌────────────────────┐  │
+        │       (profiling,     │   │  REPORTS SERVER    │  │
+        │        explore,drift) │   │  nginx :8888       │  │
+        └───────────────────────┘   │  autoindex on      │  │
+                                    │  read-only mount   │  │
+                                    └────────────────────┘  │
                                                              │
                     ┌────────────────────────────────────────┘
                     │
@@ -88,7 +91,7 @@
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                    Docker Compose (7 Services)                  │
+│                    Docker Compose (8 Services)                  │
 ├─────────────────────────────────────────────────────────────────┤
 │                                                                 │
 │  ┌──────────────────────────────────────┐                       │
@@ -126,7 +129,7 @@
 │  ┌──────────────────────────────────────┐                       │
 │  │  ML SERVICES                         │                       │
 │  │  ┌────────────────────────────────┐  │                       │
-│  │  │ mlflow-server (:5000)          │  │                       │
+│  │  │ mlflow-server (:5001)          │  │                       │
 │  │  │ • Model registry               │  │                       │
 │  │  │ • Artifact storage             │  │                       │
 │  │  │ • Metrics tracking             │  │                       │
@@ -135,6 +138,12 @@
 │  │  │ fastapi-server (:8000)         │  │                       │
 │  │  │ • Model inference              │  │                       │
 │  │  │ • Health checks                │  │                       │
+│  │  └────────────────────────────────┘  │                       │
+│  │  ┌────────────────────────────────┐  │                       │
+│  │  │ reports-server (:8888)         │  │                       │
+│  │  │ • nginx, autoindex on          │  │                       │
+│  │  │ • Serves reports/ read-only    │  │                       │
+│  │  │ • URL in orchestration.yaml    │  │                       │
 │  │  └────────────────────────────────┘  │                       │
 │  └──────────────────────────────────────┘                       │
 │                                                                 │
@@ -168,12 +177,14 @@ STAGE 2: VALIDATE_RAW
 data/<pipeline>/raw/<run_id>/*.csv / *.parquet
         │
         ├─→ Load manifest
+        ├─→ Replace sentinel strings with NaN (from pipeline.yaml validation.sentinel_values)
+        ├─→ Resolve schema per file — per_file_schemas first-match, global config fallback
         ├─→ Apply Pandera schema
-        │   ├─ Type validation (int, float, str)
-        │   ├─ Nullable checks
-        │   └─ Column existence
+        │   ├─ Required columns (per-file or global)
+        │   ├─ Numeric bounds (per-file or global)
+        │   └─ Minimum row count (per-file or global)
         │
-        └─→ Output: Validation report
+        └─→ Output: Validation report (all files checked before raising)
 
 
 STAGE 3: PROFILE
@@ -194,49 +205,52 @@ STAGE 4: CLEAN
 ───────────────────────────────────────────────────────
 data/<pipeline>/raw/<run_id>/*.csv / *.parquet
         │
+        ├─→ Replace sentinel strings with NaN (pipeline.yaml validation.sentinel_values)
         ├─→ Type coercion
-        │   └─ Convert numeric columns
+        │   └─ Coerce object columns to numeric where ≥50% of values convert cleanly
         │
         ├─→ Missing value handling
-        │   └─ Drop columns with >50% missing
+        │   ├─ Drop columns with >50% missing (protect_columns exempt)
+        │   └─ Impute remaining NaN via strategy from cleaning.yaml (default: median)
         │
-        ├─→ Deduplication
-        │   └─ Remove exact duplicates
+        ├─→ Drop pattern-matched columns (cleaning.yaml drop_column_patterns)
+        ├─→ Deduplication — remove exact duplicate rows
         │
         ├─→ Write to interim (format preserved: CSV→CSV, Parquet→Parquet)
         │   data/<pipeline>/interim/<run_id>/*.csv / *.parquet
         │
-        └─→ Output: Cleaned data + manifest
+        └─→ Output: Cleaned data + manifest.yaml
 
 
 STAGE 5: FEATURE_ENGINEER
 ───────────────────────────────────────────────────────
 data/<pipeline>/interim/<run_id>/*.csv / *.parquet
         │
-        ├─→ Load all cleaned files
-        ├─→ Concatenate
+        ├─→ Load feature matrix
+        │   ├─ join_strategy.enabled=true → pivot-join (spine + pivoted side files)
+        │   └─ join_strategy.enabled=false → naive concat of all interim files
         │
-        ├─→ Encoding
-        │   ├─ Label encode categoricals
-        │   ├─ One-hot encode comparisons
-        │   └─ Drop original encoded cols
+        ├─→ Encode categorical columns (features.yaml encoding map)
+        │   ├─ frequency — replace with frequency ratio
+        │   └─ label — LabelEncoder
         │
-        ├─→ Feature selection
-        │   └─ Drop NZV columns
-        │   └─ Drop specified columns
+        ├─→ Drop rows with missing target
+        ├─→ NZV filter — drop near-zero variance columns (features.yaml nzv_threshold)
+        ├─→ Fill NaN/inf with column median; drop all-NaN columns
         │
-        ├─→ Scaling
-        │   └─ StandardScaler on numeric features
+        ├─→ Box-Cox transform on target (if features.yaml boxcox_target=true)
         │
-        ├─→ Train/Test Split
-        │   ├─ 80/20 split
-        │   ├─ Stratified on target
-        │   └─ Save as Parquet
+        ├─→ VIF pruning — drop high multicollinearity predictors
+        │   └─ Skipped when features.yaml vif_threshold=null (e.g. correlated survey data)
+        │
+        ├─→ StandardScaler on numeric features (if features.yaml scale=true)
+        │
+        ├─→ Train/test split (pipeline.yaml train_test_split ratio)
         │
         ├─→ data/<pipeline>/features/<run_id>/
         │   ├─ train.parquet
         │   ├─ test.parquet
-        │   └─ manifest.yaml
+        │   └─ manifest.yaml (includes transform_meta: boxcox_lambda, vif_dropped)
         │
         └─→ Output: Feature matrices ready for training
 
@@ -328,7 +342,7 @@ data/<pipeline>/features/<run_id>/train.parquet
 ┌──────────────────────────────────────────────────────┐
 │ ORCHESTRATION & WORKFLOW                             │
 ├──────────────────────────────────────────────────────┤
-│ • Apache Airflow 2.10.0                              │
+│ • Apache Airflow 3                                   │
 │   └─ DAG-based orchestration, LocalExecutor          │
 │   └─ Task dependency management                      │
 │   └─ Monitoring & alerting via webserver             │
@@ -394,6 +408,11 @@ data/<pipeline>/features/<run_id>/train.parquet
 │                                                      │
 │ • Uvicorn 0.24.x                                     │
 │   └─ ASGI server for FastAPI                         │
+│                                                      │
+│ • nginx:alpine                                       │
+│   └─ Static file server for HTML reports (:8888)     │
+│   └─ autoindex on — directory listing enabled        │
+│   └─ Read-only bind-mount of reports/                │
 └──────────────────────────────────────────────────────┘
 
 ┌──────────────────────────────────────────────────────┐
@@ -484,10 +503,13 @@ config/base/defaults.yaml (shared across all pipelines)
 └─ mlflow: tracking URI (http://mlflow-server:5000)
 
 config/<pipeline>/ (one directory per pipeline, e.g. biomedical_clinical, bioinfo_gene)
-├─ orchestration.yaml  (dag_id, schedule, tags, data directories — overrides base defaults)
-├─ pipeline.yaml       (target, sources, problem type, split ratio)
-├─ cleaning.yaml       (type coercion, missing value handling)
-├─ features.yaml       (encoding strategies, polynomial features, scaling)
+├─ orchestration.yaml  (dag_id, schedule, tags, data directories, reports_base_url — overrides base defaults)
+├─ pipeline.yaml       (target, sources, problem type, split ratio;
+│                       validation.sentinel_values — dataset missing-value strings;
+│                       validation.per_file_schemas — per-file required columns and numeric bounds)
+├─ cleaning.yaml       (impute_strategy, protect_columns, drop_column_patterns)
+├─ features.yaml       (encoding, join_strategy for pivot-join, nzv_threshold,
+│                       vif_threshold (null to skip), boxcox_target, scale)
 └─ models.yaml         (hyperparameters for Ridge, LightGBM)
 
 Adding a new pipeline: drop a new config/<name>/ directory with orchestration.yaml.
@@ -502,11 +524,12 @@ All configs loaded via Pydantic models in src/utils/config.py
 - load_models_config(config_dir) → model hyperparameters
 
 Benefits:
-✓ No hardcoded parameters in Python code
+✓ No hardcoded parameters in Python code (incl. sentinel strings, schema rules)
 ✓ Base defaults DRY — only overrides live in pipeline configs
-✓ Type-safe validation at load time
+✓ Type-safe validation at load time via Pydantic
 ✓ Single source of truth for all parameters
 ✓ New pipelines added as config dirs, zero code changes
+✓ Per-file schema enforcement without touching Python (per_file_schemas)
 ```
 
 ## Manifest.yaml Versioning
@@ -533,14 +556,17 @@ data/biomedical_clinical/interim/<run_id>/manifest.yaml
 data/biomedical_clinical/features/<run_id>/manifest.yaml
 ├─ run_id: <run_id>
 ├─ stage: feature_engineer
+├─ transform_meta:
+│  ├─ boxcox_lambda: 0.4231   (omitted if boxcox_target: false)
+│  └─ vif_dropped: [...]      (omitted if vif_threshold: null)
 ├─ train:
 │  ├─ path: data/biomedical_clinical/features/<run_id>/train.parquet
-│  ├─ rows: 16
-│  └─ columns: 26
+│  ├─ rows: 3841
+│  └─ columns: 27
 ├─ test:
 │  ├─ path: data/biomedical_clinical/features/<run_id>/test.parquet
-│  ├─ rows: 4
-│  └─ columns: 26
+│  ├─ rows: 961
+│  └─ columns: 27
 ```
 
 ---
@@ -702,7 +728,7 @@ SCALE-OUT ARCHITECTURE (Future)
 
 | Component | Technology | Purpose |
 |-----------|-----------|---------|
-| **Orchestration** | Apache Airflow 2.10 | DAG scheduling, task management |
+| **Orchestration** | Apache Airflow 3 | DAG scheduling, task management |
 | **Validation** | Pandera 0.18 | Schema enforcement at boundaries |
 | **Profiling** | ydata-profiling 4.x | Automated EDA reports |
 | **Data Processing** | Pandas 2.1 | ETL operations |
@@ -715,10 +741,12 @@ SCALE-OUT ARCHITECTURE (Future)
 | **Dependency Mgmt** | uv + pyproject.toml | 309 packages pinned |
 
 **Key Design Principles:**
-- ✅ Manifest-based versioning at every boundary
-- ✅ Pandera validation gates prevent bad data
+- ✅ Manifest-based versioning at every boundary (centralized in `src/utils/manifest.py`)
+- ✅ Pandera validation gates prevent bad data; per-file schemas from `pipeline.yaml`
+- ✅ Config-driven sentinel values — no hardcoded missing-value strings in Python
 - ✅ XCom links pipeline stages via run_id
 - ✅ MLflow tracks all experiments (no manual logging)
 - ✅ Staging-only registration (no auto-promotion)
 - ✅ Local storage for POC (scales to S3/GCS)
-- ✅ All infrastructure as code (docker-compose)
+- ✅ All infrastructure as code (docker compose)
+- ✅ Reports accessible via nginx at `:8888`; Airflow task "Docs" tab links directly

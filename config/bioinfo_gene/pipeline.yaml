@@ -15,3 +15,12 @@ target:
 problem_type: regression
 train_test_split: 0.80
 random_state: 42
+
+validation:
+  required_columns:
+    - gene_id
+    - expression_level
+  numeric_bounds:
+    expression_level:
+      min: 0.0
+  min_rows: 1

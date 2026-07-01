@@ -16,3 +16,4 @@ directories:
   features: data/biomedical_clinical/features
   reports: reports/biomedical_clinical
   config: config/biomedical_clinical
+  reports_base_url: "http://localhost:8888/biomedical_clinical"

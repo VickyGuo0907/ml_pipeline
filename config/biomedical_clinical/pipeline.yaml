@@ -20,3 +20,40 @@ problem_type: "regression"
 train_test_split: 0.81
 
 random_state: 42
+
+validation:
+  # Strings CMS uses for missing data — replaced with NaN at both validate and clean stages
+  sentinel_values:
+    - "Not Available"
+    - "Too Few to Report"
+    - "Not Applicable"
+
+  # Global fallback: columns present in every CMS Hospital Compare file
+  required_columns:
+    - "Facility ID"
+  min_rows: 1
+
+  # Per-file rules — first matching pattern wins; override the global fallback above
+  per_file_schemas:
+    - file_pattern: "FY_2024_Hospital_Readmissions_Reduction_Program"
+      required_columns:
+        - "Facility ID"
+        - "Measure Name"       # needed for PN filter in feature stage
+      numeric_bounds:
+        "Excess Readmission Ratio":
+          min: 0.0
+          max: 5.0             # CMS-defined ratio; values >5 indicate data error
+      min_rows: 100
+
+    - file_pattern: "HCAHPS"
+      required_columns:
+        - "Facility ID"
+        - "HCAHPS Question"    # needed for pivot in feature stage
+      numeric_bounds:
+        "HCAHPS Linear Mean Value":
+          min: 0.0
+          max: 100.0           # satisfaction score; nullable (89% NaN by design)
+      min_rows: 1000
+
+profiling:
+  minimal: false

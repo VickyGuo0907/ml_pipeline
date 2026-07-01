@@ -1,5 +1,6 @@
 """Model evaluation and registration to MLflow."""
 import logging
+import math
 from datetime import datetime, timezone
 from typing import Any
 
@@ -56,10 +57,20 @@ def register_models_to_mlflow(
             metrics = run.data.metrics
             run_tags = run.data.tags
 
-            test_rmse = metrics.get("test_rmse", 0)
-            train_rmse = metrics.get("train_rmse", 0)
-            test_mse = metrics.get("test_mse", 0)
+            test_rmse = metrics.get("test_rmse")
+            train_rmse = metrics.get("train_rmse", 0.0)
+            test_mse = metrics.get("test_mse", 0.0)
             model_type = run_tags.get("model_type", "unknown")
+
+            if test_rmse is None:
+                raise ValueError("test_rmse not found in MLflow metrics — did training complete?")
+            if not math.isfinite(test_rmse):
+                raise ValueError(f"test_rmse={test_rmse} is non-finite — refusing to register")
+            test_r2 = metrics.get("test_r2")
+            if test_r2 is not None and math.isfinite(test_r2) and test_r2 < -1.0:
+                raise ValueError(
+                    f"test_r2={test_r2:.4f} below -1.0 — model is worse than predicting the mean"
+                )
 
             model_uri = f"runs:/{run_id}/model"
             registered_model = mlflow.register_model(

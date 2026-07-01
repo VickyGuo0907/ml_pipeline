@@ -67,6 +67,7 @@ services:
       - ${PWD}/config:/opt/airflow/config
       - ${PWD}/data:/opt/airflow/data
       - ${PWD}/mlflow-artifacts:/opt/airflow/mlflow-artifacts
+      - ${PWD}/reports:/opt/airflow/reports
       - airflow-logs:/opt/airflow/logs
     entrypoint: >
       bash -c "airflow db migrate && airflow webserver"
@@ -101,6 +102,8 @@ services:
       - ${PWD}/config:/opt/airflow/config
       - ${PWD}/data:/opt/airflow/data
       - ${PWD}/mlflow-artifacts:/opt/airflow/mlflow-artifacts
+      - ${PWD}/mlflow-artifacts:/mlflow-artifacts
+      - ${PWD}/reports:/opt/airflow/reports
       - airflow-logs:/opt/airflow/logs
     command: scheduler
     healthcheck:
@@ -133,6 +136,7 @@ services:
       - ${PWD}/config:/opt/airflow/config
       - ${PWD}/data:/opt/airflow/data
       - ${PWD}/mlflow-artifacts:/opt/airflow/mlflow-artifacts
+      - ${PWD}/reports:/opt/airflow/reports
       - airflow-logs:/opt/airflow/logs
     command: triggerer
     healthcheck:
@@ -162,6 +166,7 @@ services:
       mlflow server
       --backend-store-uri postgresql://mlflow:${MLFLOW_DB_PASSWORD:-mlflow}@mlflow-postgres:5432/mlflow
       --default-artifact-root /mlflow-artifacts
+      --serve-artifacts
       --host 0.0.0.0
       --port 5000
     healthcheck:
@@ -169,6 +174,18 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    networks:
+      - ml-pipeline
+
+  # Reports server — serves HTML profiling reports at http://localhost:8888
+  reports-server:
+    image: nginx:alpine
+    container_name: reports-server
+    ports:
+      - "8888:80"
+    volumes:
+      - ${PWD}/reports:/usr/share/nginx/html:ro
+      - ${PWD}/config/nginx/reports.conf:/etc/nginx/conf.d/default.conf:ro
     networks:
       - ml-pipeline
 

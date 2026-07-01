@@ -4,8 +4,11 @@ import pandas as pd
 import pytest
 from pandera.errors import SchemaError
 
-from src.schemas.features import features_schema
+from src.schemas.features import build_features_schema
 from src.schemas.raw import raw_schema
+
+# Use the same target column as pipeline.yaml for schema tests
+features_schema = build_features_schema("Excess Readmission Ratio")
 
 
 class TestRawSchema:

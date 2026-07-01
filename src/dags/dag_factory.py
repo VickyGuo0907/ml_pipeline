@@ -25,11 +25,11 @@ from src.ingest import ingest_files  # noqa: E402
 from src.monitoring import generate_drift_report  # noqa: E402
 from src.profile import profile_raw_files  # noqa: E402
 from src.train import train_models  # noqa: E402
-from src.utils.config import OrchestrationConfig, discover_pipelines, load_pipeline_orchestration_config  # noqa: E402
+from src.utils.config import OrchestrationConfig, discover_pipelines, load_pipeline_config, load_pipeline_orchestration_config  # noqa: E402
 from src.validate import validate_raw_files  # noqa: E402
 
 import pandas as pd  # noqa: E402
-from src.schemas.features import features_schema  # noqa: E402
+from src.schemas.features import build_features_schema  # noqa: E402
 
 
 def build_dag(config: OrchestrationConfig) -> DAG:
@@ -76,10 +76,11 @@ def build_dag(config: OrchestrationConfig) -> DAG:
         return result
 
     def validate_raw_wrapper(**context) -> dict:
-        """Validate raw data against pandera schema."""
+        """Validate raw data against config-driven pandera schema."""
         return validate_raw_files(
             raw_dir=config.directories.raw,
             run_id=_pull_run_id(context),
+            config_dir=config.directories.config,
         )
 
     def profile_wrapper(**context) -> dict:
@@ -88,6 +89,7 @@ def build_dag(config: OrchestrationConfig) -> DAG:
             raw_dir=config.directories.raw,
             run_id=_pull_run_id(context),
             reports_dir=config.directories.reports,
+            config_dir=config.directories.config,
         )
 
     def clean_wrapper(**context) -> dict:
@@ -109,11 +111,22 @@ def build_dag(config: OrchestrationConfig) -> DAG:
         )
 
     def validate_features_wrapper(**context) -> dict:
-        """Validate feature matrix with pandera schema."""
+        """Validate feature matrix: target column type, all-numeric, minimum row count."""
         run_id = _pull_run_id(context)
         train_df = pd.read_parquet(f"{config.directories.features}/{run_id}/train.parquet")
-        features_schema.validate(train_df)
-        return {"validated_rows": len(train_df)}
+
+        pipeline_cfg = load_pipeline_config(config.directories.config)
+        target_col = pipeline_cfg.target.name
+
+        if len(train_df) < 100:
+            raise ValueError(f"Train set too small: {len(train_df)} rows (minimum 100)")
+
+        non_numeric = train_df.select_dtypes(exclude="number").columns.tolist()
+        if non_numeric:
+            raise ValueError(f"Non-numeric columns in feature matrix: {non_numeric}")
+
+        build_features_schema(target_col).validate(train_df)
+        return {"validated_rows": len(train_df), "target_col": target_col}
 
     def explore_wrapper(**context) -> dict:
         """PCA + k-means unsupervised analysis (runs in parallel with validate_features)."""
@@ -158,6 +171,8 @@ def build_dag(config: OrchestrationConfig) -> DAG:
             reports_dir=config.directories.reports,
         )
 
+    _reports_url = config.directories.reports_base_url
+
     with dag:
         ingest_task = PythonOperator(
             task_id="01_ingest_files",
@@ -172,7 +187,7 @@ def build_dag(config: OrchestrationConfig) -> DAG:
         profile_task = PythonOperator(
             task_id="03_profile_data",
             python_callable=profile_wrapper,
-
+            doc_md=f"## Data Profile Reports\n\n[Open reports →]({_reports_url}/)",
         )
         clean_task = PythonOperator(
             task_id="04_clean_data",
@@ -192,7 +207,7 @@ def build_dag(config: OrchestrationConfig) -> DAG:
         explore_task = PythonOperator(
             task_id="06b_unsupervised_explore",
             python_callable=explore_wrapper,
-
+            doc_md=f"## Unsupervised Analysis Reports\n\n[Open reports →]({_reports_url}/)",
         )
         train_task = PythonOperator(
             task_id="07_train_models",
@@ -208,7 +223,7 @@ def build_dag(config: OrchestrationConfig) -> DAG:
         drift_task = PythonOperator(
             task_id="09_drift_report",
             python_callable=drift_wrapper,
-
+            doc_md=f"## Drift Report\n\n[Open reports →]({_reports_url}/)",
         )
 
         # Pipeline flow — explore runs in parallel with validate_features

@@ -50,7 +50,7 @@ def test_load_features_config():
     assert "State" in config.encoding
     assert config.encoding["State"] == "frequency"
     assert config.boxcox_target is True
-    assert config.vif_threshold == 5.0
+    assert config.vif_threshold is None  # disabled: HCAHPS questions are correlated by design
     assert len(config.drop_columns) >= 1
 
 
