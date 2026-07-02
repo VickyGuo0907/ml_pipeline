@@ -255,17 +255,43 @@ data/<pipeline>/interim/<run_id>/*.csv / *.parquet
         └─→ Output: Feature matrices ready for training
 
 
-STAGE 6: VALIDATE_FEATURES
+STAGE 6: VALIDATE_FEATURES  [runs in parallel with Stage 6b]
 ───────────────────────────────────────────────────────
 data/<pipeline>/features/<run_id>/train.parquet
         │
-        ├─→ Load feature matrix
-        ├─→ Apply Pandera features schema
-        │   ├─ Type validation
-        │   ├─ Column presence
-        │   └─ Numeric bounds
+        ├─→ Load train.parquet
+        ├─→ Guard: row count ≥ 100 (hard fail if too small)
+        ├─→ Guard: all columns must be numeric (no stray string cols)
+        ├─→ Pandera schema — target column from pipeline.yaml target.name
+        │   └─ Column(float, nullable=True) — config-driven, not hardcoded
         │
-        └─→ Output: Validation passed
+        └─→ Output: Validation passed (or exception with detail)
+
+
+STAGE 6b: UNSUPERVISED_EXPLORE  [runs in parallel with Stage 6]
+───────────────────────────────────────────────────────
+data/<pipeline>/features/<run_id>/train.parquet
+        │
+        ├─→ Read unsupervised config from pipeline.yaml
+        │   ├─ enabled (skip entirely if false)
+        │   ├─ pca.enabled
+        │   └─ clustering.algorithm + max_k
+        │
+        ├─→ [if pca.enabled] PCA variance decomposition
+        │   ├─ Fit on scaled feature matrix
+        │   ├─ Record PC1 variance, n_components for 80% threshold
+        │   └─ explained_variance_ratio per component
+        │
+        ├─→ [if clustering.algorithm == "kmeans"] Elbow search k=2..max_k
+        │   ├─ WSS inertia + silhouette score per k
+        │   ├─ Select optimal k (highest silhouette)
+        │   └─ Characterize clusters by target mean → high/low performance labels
+        │
+        ├─→ Save YAML report
+        │   reports/<pipeline>/<run_id>_unsupervised.yaml
+        │
+        └─→ Output: YAML with PCA stats + cluster characterization (insight only,
+            does NOT feed into training)
 
 
 STAGE 7: TRAIN
@@ -385,10 +411,11 @@ data/<pipeline>/features/<run_id>/train.parquet
 ┌──────────────────────────────────────────────────────┐
 │ ML TRACKING & MODEL REGISTRY                         │
 ├──────────────────────────────────────────────────────┤
-│ • MLflow 2.10.x                                      │
+│ • MLflow 3.1.x                                       │
 │   └─ Experiment tracking (metrics, params, artifacts)│
 │   └─ Model registry (Staging/Production)             │
 │   └─ PostgreSQL backend + local artifact store       │
+│   └─ --serve-artifacts mode (proxied artifact API)   │
 └──────────────────────────────────────────────────────┘
 
 ┌──────────────────────────────────────────────────────┐
@@ -506,7 +533,8 @@ config/<pipeline>/ (one directory per pipeline, e.g. biomedical_clinical, bioinf
 ├─ orchestration.yaml  (dag_id, schedule, tags, data directories, reports_base_url — overrides base defaults)
 ├─ pipeline.yaml       (target, sources, problem type, split ratio;
 │                       validation.sentinel_values — dataset missing-value strings;
-│                       validation.per_file_schemas — per-file required columns and numeric bounds)
+│                       validation.per_file_schemas — per-file required columns and numeric bounds;
+│                       unsupervised.enabled / pca.enabled / clustering.algorithm+max_k — Stage 06b)
 ├─ cleaning.yaml       (impute_strategy, protect_columns, drop_column_patterns)
 ├─ features.yaml       (encoding, join_strategy for pivot-join, nzv_threshold,
 │                       vif_threshold (null to skip), boxcox_target, scale)
@@ -733,7 +761,7 @@ SCALE-OUT ARCHITECTURE (Future)
 | **Profiling** | ydata-profiling 4.x | Automated EDA reports |
 | **Data Processing** | Pandas 2.1 | ETL operations |
 | **Modeling** | scikit-learn + LightGBM | Linear baseline + gradient boosting |
-| **Tracking** | MLflow 2.10 | Experiment tracking, model registry |
+| **Tracking** | MLflow 3.1 | Experiment tracking, model registry |
 | **Monitoring** | Evidently AI 0.4 | Data drift detection |
 | **Serving** | FastAPI 0.104 | Model inference API |
 | **Storage** | PostgreSQL 16 + Parquet | Metadata + feature matrices |
@@ -741,7 +769,7 @@ SCALE-OUT ARCHITECTURE (Future)
 | **Dependency Mgmt** | uv + pyproject.toml | 309 packages pinned |
 
 **Key Design Principles:**
-- ✅ Manifest-based versioning at every boundary (centralized in `src/utils/manifest.py`)
+- ✅ Manifest-based versioning at every boundary (centralized in `src/utils/io.py`)
 - ✅ Pandera validation gates prevent bad data; per-file schemas from `pipeline.yaml`
 - ✅ Config-driven sentinel values — no hardcoded missing-value strings in Python
 - ✅ XCom links pipeline stages via run_id

@@ -52,17 +52,18 @@ End-to-end machine learning pipeline demonstrating orchestration, validation, tr
 
 ## Pipeline Architecture
 
-### Stages (9 tasks in sequence)
+### Stages (10 tasks — stages 6 and 6b run in parallel)
 
 1. **ingest** — Move files from `data/<pipeline>/landing` to `data/<pipeline>/raw/<run_id>`, write `manifest.yaml`
-2. **validate_raw** — Pandera schema validation on raw data per source
+2. **validate_raw** — Pandera schema check per source file; rules (required columns, bounds, min rows) from `pipeline.yaml`
 3. **profile** — ydata-profiling HTML reports per source
-4. **clean** — Type coercion, missing value handling, deduplication → `data/<pipeline>/interim/<run_id>`
-5. **feature_engineer** — Joins, encoding, NZV filtering, train/test split → `data/<pipeline>/features/<run_id>`
-6. **validate_features** — Pandera schema check on feature matrix
-7. **train** — sklearn linear + LightGBM models, log metrics to MLflow
-8. **register** — Register both models to MLflow Staging (no auto-promotion)
-9. **drift_report** — Evidently AI drift monitoring (current vs previous training set)
+4. **clean** — Type coercion, sentinel replacement, missing value imputation, deduplication → `data/<pipeline>/interim/<run_id>`
+5. **feature_engineer** — Pivot-join assembly, encoding, NZV filter, Box-Cox, VIF pruning, scaling, train/test split
+6. **validate_features** *(parallel)* — Row count ≥ 100, all-numeric guard, Pandera check on target column (config-driven from `pipeline.yaml`)
+7. **unsupervised_explore** *(parallel with 6)* — PCA + k-means hospital segmentation; algorithm and `max_k` config-driven; writes YAML report; does not feed into training
+8. **train** — sklearn Ridge + LightGBM, log metrics to MLflow
+9. **register** — Register both models to MLflow Staging (no auto-promotion); refuses if `test_rmse` is invalid or `test_r2 < -1.0`
+10. **drift_report** — Evidently AI drift monitoring (current vs previous training set)
 
 ### Data Flow
 
@@ -97,7 +98,7 @@ All config in `config/` directory, validated via Pydantic models:
 
 - `config/base/defaults.yaml` — Shared defaults (retries, MLflow URI) inherited by all pipelines
 - `config/<pipeline>/orchestration.yaml` — Per-pipeline DAG settings (dag_id, schedule, directories, `reports_base_url`)
-- `config/<pipeline>/pipeline.yaml` — Sources, target, problem type, split ratio; `validation.sentinel_values` (dataset-specific missing-value strings); `validation.per_file_schemas` (per-file required columns and bounds)
+- `config/<pipeline>/pipeline.yaml` — Sources, target, problem type, split ratio; `validation.sentinel_values` (dataset-specific missing-value strings); `validation.per_file_schemas` (per-file required columns and bounds); `unsupervised` (enable/disable PCA and clustering, set `max_k`)
 - `config/<pipeline>/cleaning.yaml` — Data cleaning recipes (impute strategy, protect columns, drop patterns)
 - `config/<pipeline>/features.yaml` — Feature engineering (encoding, join strategy, NZV filter, VIF threshold, scaling)
 - `config/<pipeline>/models.yaml` — Model hyperparameters (linear, LightGBM)
@@ -191,12 +192,13 @@ Place CSV or Parquet files in `data/biomedical_clinical/landing/` before running
 ## Key Design Decisions
 
 1. **One DAG, task groups:** Single orchestration DAG with 9 task groups for clarity
-2. **Manifest versioning:** `src/utils/manifest.py` helpers write `manifest.yaml` at every storage boundary (ingest, clean, features); no stage duplicates this logic
+2. **Manifest versioning:** `src/utils/io.py` consolidates all I/O helpers (readers, writers, manifest read/write, path resolution); every stage imports from here — no duplicated file logic
 3. **Pandera schemas:** Config-driven validation at raw boundaries; `per_file_schemas` in `pipeline.yaml` allows per-file required columns and bounds without touching Python
 4. **Config-driven sentinel values:** Dataset-specific missing-value strings (e.g. "Not Available") declared in `pipeline.yaml` under `validation.sentinel_values`; both Stage 2 (validate) and Stage 4 (clean) read from the same source
 5. **Pivot-join feature assembly:** `features.yaml` join strategy config filters and pivots multi-source files onto a spine; no code changes needed to add join sources
 6. **VIF pruning is optional:** Set `vif_threshold: null` in `features.yaml` to skip VIF pruning for datasets with intentionally correlated predictors (e.g. HCAHPS survey questions)
-7. **No auto-promotion:** Manual MLflow UI click to move models to Production
+7. **Config-driven unsupervised exploration:** Stage 06b algorithm (kmeans/skip), PCA toggle, and `max_k` are all in `pipeline.yaml`; different datasets can disable or tune without touching code
+8. **No auto-promotion:** Manual MLflow UI click to move models to Production
 8. **LocalExecutor:** Single-machine orchestration (suitable for POC)
 9. **Separate Postgres:** Airflow metadata and MLflow tracking use distinct databases
 10. **Read-only MLflow artifacts:** FastAPI mounts artifacts as read-only
