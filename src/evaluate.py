@@ -130,7 +130,9 @@ def register_models_to_mlflow(
             pipeline_type = run_tags.get("pipeline_type", "unknown")
             pipeline_run_id = run_tags.get("run_id", run_id)
 
-            # Hard sanity guards — non-finite metrics indicate a training failure
+            # Hard sanity guards — non-finite metrics indicate a training failure.
+            # NaN comparisons are always False, so an unguarded NaN test_r2 would
+            # silently pass the threshold gate in _check_thresholds below.
             if test_rmse is None:
                 raise ValueError(
                     f"test_rmse not found for {model_name} — did training complete?"
@@ -138,6 +140,10 @@ def register_models_to_mlflow(
             if not math.isfinite(test_rmse):
                 raise ValueError(
                     f"test_rmse={test_rmse} is non-finite for {model_name}"
+                )
+            if test_r2 is not None and not math.isfinite(test_r2):
+                raise ValueError(
+                    f"test_r2={test_r2} is non-finite for {model_name}"
                 )
 
             # Configurable threshold gate
@@ -284,6 +290,15 @@ def register_models_to_mlflow(
         raise RuntimeError(
             f"Registration failed for {len(infra_failures)} model(s): "
             f"{', '.join(infra_failures)}. See logs for details."
+        )
+
+    # Zero registrations means every model failed the quality gate — fail the task
+    # loudly instead of letting the DAG run go green with nothing deployable.
+    if not registered:
+        raise ValueError(
+            f"All {len(rejected)} model(s) rejected by evaluation thresholds "
+            f"({', '.join(rejected)}). Nothing registered to Staging. "
+            f"See reports/<pipeline>/{run_id}_evaluation.yaml for reasons."
         )
 
     return registration_results
