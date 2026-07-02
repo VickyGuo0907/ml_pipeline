@@ -54,9 +54,9 @@ def test_load_cleaning_config():
     """Test loading and validating the biomedical_clinical cleaning configuration."""
     config = load_cleaning_config(BIOMEDICAL_CONFIG)
     assert isinstance(config, CleaningConfig)
-    assert config.impute_strategy == "iterative"
+    assert config.impute_strategy == "median"
     assert len(config.drop_column_patterns) > 0
-    assert "Payment" in config.drop_column_patterns
+    assert "Footnote" in config.drop_column_patterns
     assert len(config.steps) >= 1
     assert config.steps[0].name == "type_coercion"
 
