@@ -80,6 +80,30 @@ class ProfilingConfig(BaseModel):
     )
 
 
+class PCAConfig(BaseModel):
+    """PCA settings for Stage 06b unsupervised exploration."""
+
+    enabled: bool = Field(default=True, description="Run PCA variance decomposition")
+
+
+class ClusteringConfig(BaseModel):
+    """Clustering settings for Stage 06b unsupervised exploration."""
+
+    algorithm: str = Field(
+        default="kmeans",
+        description="Clustering algorithm: 'kmeans' runs elbow search; 'skip' disables clustering",
+    )
+    max_k: int = Field(default=10, ge=2, description="Maximum k tested in elbow search (kmeans only)")
+
+
+class UnsupervisedConfig(BaseModel):
+    """Unsupervised exploration settings for Stage 06b (PCA + clustering)."""
+
+    enabled: bool = Field(default=True, description="Run unsupervised analysis; false skips the stage entirely")
+    pca: PCAConfig = Field(default_factory=PCAConfig)
+    clustering: ClusteringConfig = Field(default_factory=ClusteringConfig)
+
+
 class PipelineConfig(BaseModel):
     """Root pipeline configuration."""
 
@@ -95,6 +119,9 @@ class PipelineConfig(BaseModel):
     )
     profiling: ProfilingConfig = Field(
         default_factory=ProfilingConfig, description="ydata-profiling settings for Stage 3"
+    )
+    unsupervised: UnsupervisedConfig = Field(
+        default_factory=UnsupervisedConfig, description="Unsupervised exploration settings for Stage 06b"
     )
 
     @field_validator("sources")

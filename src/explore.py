@@ -20,8 +20,6 @@ from src.utils.config import load_pipeline_config
 
 logger = logging.getLogger(__name__)
 
-_MAX_K = 10  # Maximum k to test in elbow search
-
 
 def _run_pca(X: pd.DataFrame) -> dict[str, Any]:
     """Fit PCA on features and return variance explained statistics.
@@ -50,20 +48,21 @@ def _run_pca(X: pd.DataFrame) -> dict[str, Any]:
     }
 
 
-def _find_optimal_k(X: pd.DataFrame) -> dict[str, Any]:
+def _find_optimal_k(X: pd.DataFrame, max_k: int) -> dict[str, Any]:
     """Find optimal k using WSS elbow + silhouette score.
 
     SVG: "K-means: optimal k = 2 — WSS elbow + silhouette agree"
 
     Args:
         X: Feature matrix.
+        max_k: Maximum number of clusters to test (from config).
 
     Returns:
         Dict with optimal k, inertias, and silhouette scores.
     """
     inertias: list[float] = []
     silhouettes: list[float] = []
-    k_range = range(2, min(_MAX_K + 1, X.shape[0]))
+    k_range = range(2, min(max_k + 1, X.shape[0]))
 
     for k in k_range:
         km = KMeans(n_clusters=k, random_state=42, n_init=10)
@@ -145,6 +144,11 @@ def run_unsupervised_analysis(
 
     pipeline_config = load_pipeline_config(config_dir)
     target_col = pipeline_config.target.name
+    unsupervised_cfg = pipeline_config.unsupervised
+
+    if not unsupervised_cfg.enabled:
+        logger.info("Unsupervised analysis disabled in config — skipping")
+        return {"skipped": True, "reason": "disabled in pipeline.yaml"}
 
     df = pd.read_parquet(train_path)
     X = df.drop(columns=[target_col], errors="ignore").select_dtypes(include="number")
@@ -158,38 +162,37 @@ def run_unsupervised_analysis(
         StandardScaler().fit_transform(X), columns=X.columns
     )
 
-    logger.info("Running PCA on %s feature matrix...", X_scaled.shape)
-    pca_stats = _run_pca(X_scaled)
-    logger.info(
-        "PCA: %d components, PC1=%.1f%%, need %d for 80%%",
-        pca_stats["n_components"],
-        pca_stats["pc1_variance"] * 100,
-        pca_stats["n_components_for_80pct"],
-    )
-
-    logger.info("Searching for optimal k in [2, %d]...", min(_MAX_K, X_scaled.shape[0] - 1))
-    kmeans_stats = _find_optimal_k(X_scaled)
-    optimal_k = kmeans_stats["optimal_k"]
-    logger.info(
-        "Optimal k=%d (silhouette=%.4f)",
-        optimal_k, kmeans_stats["best_silhouette"],
-    )
-
-    # Fit final model with optimal k
-    final_km = KMeans(n_clusters=optimal_k, random_state=42, n_init=10)
-    labels = final_km.fit_predict(X_scaled).tolist()
-
-    cluster_info = _characterize_clusters(df, labels, target_col)
-
     results: dict[str, Any] = {
         "run_id": run_id,
         "pipeline_type": pipeline_config.pipeline_type,
         "n_samples": len(X_scaled),
         "n_features": X_scaled.shape[1],
-        "pca": pca_stats,
-        "kmeans": kmeans_stats,
-        "clusters": cluster_info,
     }
+
+    if unsupervised_cfg.pca.enabled:
+        logger.info("Running PCA on %s feature matrix...", X_scaled.shape)
+        pca_stats = _run_pca(X_scaled)
+        logger.info(
+            "PCA: %d components, PC1=%.1f%%, need %d for 80%%",
+            pca_stats["n_components"],
+            pca_stats["pc1_variance"] * 100,
+            pca_stats["n_components_for_80pct"],
+        )
+        results["pca"] = pca_stats
+
+    if unsupervised_cfg.clustering.algorithm == "kmeans":
+        max_k = unsupervised_cfg.clustering.max_k
+        logger.info("Searching for optimal k in [2, %d]...", min(max_k, X_scaled.shape[0] - 1))
+        kmeans_stats = _find_optimal_k(X_scaled, max_k)
+        optimal_k = kmeans_stats["optimal_k"]
+        logger.info("Optimal k=%d (silhouette=%.4f)", optimal_k, kmeans_stats["best_silhouette"])
+
+        final_km = KMeans(n_clusters=optimal_k, random_state=42, n_init=10)
+        labels = final_km.fit_predict(X_scaled).tolist()
+        results["kmeans"] = kmeans_stats
+        results["clusters"] = _characterize_clusters(df, labels, target_col)
+    else:
+        logger.info("Clustering algorithm '%s' — skipping", unsupervised_cfg.clustering.algorithm)
 
     # Save report
     Path(reports_dir).mkdir(parents=True, exist_ok=True)

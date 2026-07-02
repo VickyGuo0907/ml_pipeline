@@ -7,6 +7,7 @@ from src.utils.config import (
     ModelsConfig,
     OrchestrationConfig,
     PipelineConfig,
+    UnsupervisedConfig,
     discover_pipelines,
     load_cleaning_config,
     load_features_config,
@@ -28,6 +29,25 @@ def test_load_pipeline_config():
     assert config.train_test_split == 0.81
     assert config.pipeline_type == "biomedical_clinical"
     assert len(config.sources) >= 1
+
+
+def test_load_unsupervised_config():
+    """Test unsupervised exploration config is loaded from pipeline.yaml."""
+    config = load_pipeline_config(BIOMEDICAL_CONFIG)
+    assert isinstance(config.unsupervised, UnsupervisedConfig)
+    assert config.unsupervised.enabled is True
+    assert config.unsupervised.pca.enabled is True
+    assert config.unsupervised.clustering.algorithm == "kmeans"
+    assert config.unsupervised.clustering.max_k == 10
+
+
+def test_unsupervised_config_defaults():
+    """Test UnsupervisedConfig defaults are sensible when not specified in YAML."""
+    cfg = UnsupervisedConfig()
+    assert cfg.enabled is True
+    assert cfg.pca.enabled is True
+    assert cfg.clustering.algorithm == "kmeans"
+    assert cfg.clustering.max_k == 10
 
 
 def test_load_cleaning_config():

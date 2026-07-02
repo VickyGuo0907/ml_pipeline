@@ -57,3 +57,11 @@ validation:
 
 profiling:
   minimal: false
+
+unsupervised:
+  enabled: true
+  pca:
+    enabled: true
+  clustering:
+    algorithm: "kmeans"
+    max_k: 10
