@@ -1,9 +1,8 @@
-"""Unsupervised exploration stage: PCA + k-means cluster analysis.
+"""Stage 06b — unsupervised exploration: PCA + k-means cluster analysis.
 
-SVG Stage 3a: Unsupervised — PCA + k-means segmentation.
-
-Runs in parallel with supervised training; results inform feature understanding
-and hospital segmentation. Does NOT block or feed into the training stage.
+Runs in parallel with 06_validate_features_schema. Results inform feature
+understanding and dataset segmentation. Does NOT block or feed into training.
+Algorithm and parameters are config-driven via pipeline.yaml (unsupervised block).
 """
 import logging
 from pathlib import Path
@@ -24,13 +23,12 @@ logger = logging.getLogger(__name__)
 def _run_pca(X: pd.DataFrame) -> dict[str, Any]:
     """Fit PCA on features and return variance explained statistics.
 
-    SVG: "PCA: 18 components — PC1 = 22%, need 11 for 80%"
-
     Args:
-        X: Scaled feature matrix (no target).
+        X: Scaled feature matrix (no target column).
 
     Returns:
-        Dict with explained variance ratios and cumulative variance.
+        Dict with n_components, pc1_variance, n_components_for_80pct,
+        cumulative_80pct, and full explained_variance_ratio list.
     """
     pca = PCA(n_components=min(X.shape[1], X.shape[0]))
     pca.fit(X)
@@ -49,16 +47,17 @@ def _run_pca(X: pd.DataFrame) -> dict[str, Any]:
 
 
 def _find_optimal_k(X: pd.DataFrame, max_k: int) -> dict[str, Any]:
-    """Find optimal k using WSS elbow + silhouette score.
+    """Find optimal k by searching k=2..max_k using silhouette score as the selection criterion.
 
-    SVG: "K-means: optimal k = 2 — WSS elbow + silhouette agree"
+    Silhouette score is preferred over WSS elbow because it gives a single
+    interpretable value per k rather than requiring visual elbow inspection.
 
     Args:
-        X: Feature matrix.
-        max_k: Maximum number of clusters to test (from config).
+        X: Scaled feature matrix.
+        max_k: Upper bound for k search, from pipeline.yaml unsupervised.clustering.max_k.
 
     Returns:
-        Dict with optimal k, inertias, and silhouette scores.
+        Dict with optimal_k, best_silhouette, inertias per k, and silhouette_scores per k.
     """
     inertias: list[float] = []
     silhouettes: list[float] = []
@@ -85,17 +84,18 @@ def _find_optimal_k(X: pd.DataFrame, max_k: int) -> dict[str, Any]:
 def _characterize_clusters(
     df: pd.DataFrame, labels: list[int], target_col: str
 ) -> dict[str, Any]:
-    """Describe each cluster by target mean to assign high/low performance labels.
+    """Label each cluster as high_performance or low_performance based on mean target value.
 
-    SVG: "High-perf vs Low-perf hospitals"
+    The cluster with the lowest mean target is high_performance (lower readmission
+    ratio = better outcome). All other clusters are low_performance.
 
     Args:
-        df: Full feature + target DataFrame.
-        labels: Cluster assignment per row.
-        target_col: Name of the target column.
+        df: Full feature + target DataFrame (target column must be present).
+        labels: Cluster assignment per row, aligned with df index.
+        target_col: Name of the target column from pipeline.yaml.
 
     Returns:
-        Dict mapping cluster id → characterization stats.
+        Dict mapping str(cluster_id) → {size, target_mean, label}.
     """
     df = df.copy()
     df["_cluster"] = labels
