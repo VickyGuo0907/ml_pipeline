@@ -123,12 +123,17 @@ def train_models(
             model.fit(X_train, y_train)
             metrics, test_pred = _log_metrics(model, X_train, y_train, X_test, y_test)
 
+            model_id: str | None = None
             try:
-                mlflow.sklearn.log_model(model, artifact_path="model")
+                model_info = mlflow.sklearn.log_model(model, artifact_path="model")
+                model_id = model_info.model_id
             except Exception as e:
                 logger.warning("Could not log %s to MLflow: %s", model_cfg.name, e)
 
             # Populate the MLflow Evaluate tab with pre-computed predictions.
+            # model_id links these metrics to the LoggedModel entity created by
+            # log_model() above — without it, metrics attach only to the parent
+            # Run and the model's own Evaluate tab in the UI stays empty.
             # model=None + predictions= skips model reloading and SHAP (shap not installed).
             try:
                 eval_df = X_test.copy()
@@ -140,6 +145,7 @@ def train_models(
                     targets=target_col,
                     predictions="prediction",
                     model_type="regressor",
+                    model_id=model_id,
                 )
             except Exception as e:
                 logger.warning("mlflow.evaluate skipped for %s: %s", model_cfg.name, e)
