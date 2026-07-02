@@ -530,7 +530,10 @@ config/base/defaults.yaml (shared across all pipelines)
 └─ mlflow: tracking URI (http://mlflow-server:5000)
 
 config/<pipeline>/ (one directory per pipeline, e.g. biomedical_clinical, bioinfo_gene)
-├─ orchestration.yaml  (dag_id, schedule, tags, data directories, reports_base_url — overrides base defaults)
+├─ orchestration.yaml  (dag_id, schedule, tags, data directories, reports_base_url — overrides base defaults;
+│                       tasks.retries / retry_delay_minutes / train_models_retries;
+│                       tasks.enabled.profile / unsupervised_explore / drift_report —
+│                       set to false to drop optional tasks from the DAG entirely)
 ├─ pipeline.yaml       (target, sources, problem type, split ratio;
 │                       validation.sentinel_values — dataset missing-value strings;
 │                       validation.per_file_schemas — per-file required columns and numeric bounds;
@@ -558,6 +561,8 @@ Benefits:
 ✓ Single source of truth for all parameters
 ✓ New pipelines added as config dirs, zero code changes
 ✓ Per-file schema enforcement without touching Python (per_file_schemas)
+✓ Optional tasks (profile, unsupervised_explore, drift_report) enabled/disabled per pipeline
+  via tasks.enabled in orchestration.yaml — zero Python changes needed
 ```
 
 ## Manifest.yaml Versioning
@@ -695,11 +700,12 @@ This prevents surprises in production.
 │                                                      │
 │ SUCCESS CRITERIA                                     │
 │ ─────────────────                                    │
-│ • All 9 tasks completed                              │
+│ • All enabled tasks completed (7 core always; up to  │
+│   3 optional per tasks.enabled in orchestration.yaml)│
 │ • manifests.yaml written at each boundary            │
 │ • MLflow models registered to Staging                │
 │ • FastAPI can load Staging model                     │
-│ • Drift report generated (or baseline created)       │
+│ • Drift report generated if drift_report: true       │
 │                                                      │
 └──────────────────────────────────────────────────────┘
 ```
@@ -772,9 +778,11 @@ SCALE-OUT ARCHITECTURE (Future)
 - ✅ Manifest-based versioning at every boundary (centralized in `src/utils/io.py`)
 - ✅ Pandera validation gates prevent bad data; per-file schemas from `pipeline.yaml`
 - ✅ Config-driven sentinel values — no hardcoded missing-value strings in Python
-- ✅ XCom links pipeline stages via run_id
+- ✅ XCom links pipeline stages via run_id; task ID constants prevent silent XCom failures
 - ✅ MLflow tracks all experiments (no manual logging)
 - ✅ Staging-only registration (no auto-promotion)
 - ✅ Local storage for POC (scales to S3/GCS)
 - ✅ All infrastructure as code (docker compose)
 - ✅ Reports accessible via nginx at `:8888`; Airflow task "Docs" tab links directly
+- ✅ Optional tasks (profile, unsupervised_explore, drift_report) toggled per pipeline via
+  `tasks.enabled` in `orchestration.yaml` — dag_factory wires them in or skips conditionally

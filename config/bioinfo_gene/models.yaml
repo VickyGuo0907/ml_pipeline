@@ -2,6 +2,10 @@
 random_state: 42
 train_test_split: 0.80
 
+evaluation:
+  min_test_r2: 0.0    # reject models worse than predicting the mean
+  max_test_rmse: null # RMSE scale unknown until first run — disable for now
+
 models:
   - name: ridge_baseline
     type: ridge

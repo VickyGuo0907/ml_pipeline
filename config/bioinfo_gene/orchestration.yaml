@@ -9,6 +9,15 @@ dag:
     - bioinformatics
     - genomics
 
+tasks:
+  retries: 1
+  retry_delay_minutes: 5
+  train_models_retries: 0
+  enabled:
+    profile: true            # keep profiling — gene expression data benefits from it
+    unsupervised_explore: false  # genomic features don't cluster meaningfully with k-means
+    drift_report: false      # @monthly cadence — drift monitoring not yet needed
+
 directories:
   landing: data/bioinfo_gene/landing
   raw: data/bioinfo_gene/raw

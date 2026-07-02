@@ -6,6 +6,7 @@ from typing import Any
 import mlflow
 import mlflow.sklearn
 import pandas as pd
+import yaml
 from sklearn.metrics import r2_score
 
 from src.utils.config import load_models_config, load_pipeline_config
@@ -20,7 +21,7 @@ def _log_metrics(
     y_train: pd.Series,
     X_test: pd.DataFrame,
     y_test: pd.Series,
-) -> dict[str, float]:
+) -> tuple[dict[str, float], pd.Series]:
     """Compute and log regression metrics for both splits.
 
     Args:
@@ -31,7 +32,9 @@ def _log_metrics(
         y_test: Test labels.
 
     Returns:
-        Dict of metric name → value.
+        Tuple of (metrics dict, test predictions Series).
+        Test predictions are returned so the caller can pass them to
+        mlflow.evaluate() without a second predict() call.
     """
     train_pred = model.predict(X_train)
     test_pred = model.predict(X_test)
@@ -46,7 +49,7 @@ def _log_metrics(
     }
     for name, value in metrics.items():
         mlflow.log_metric(name, value)
-    return metrics
+    return metrics, pd.Series(test_pred, index=X_test.index)
 
 
 def train_models(
@@ -92,6 +95,14 @@ def train_models(
     X_test = test_df.drop(columns=[target_col])
     y_test = test_df[target_col]
 
+    # Read Box-Cox lambda from features manifest so serve.py can inverse-transform predictions
+    boxcox_lambda: float | None = None
+    manifest_path = features_path / "manifest.yaml"
+    if manifest_path.exists():
+        with open(manifest_path) as f:
+            manifest = yaml.safe_load(f)
+        boxcox_lambda = manifest.get("transform_meta", {}).get("boxcox_lambda")
+
     mlflow.set_tracking_uri(mlflow_tracking_uri)
     training_results: dict[str, Any] = {"run_id": run_id, "models": {}}
 
@@ -106,13 +117,32 @@ def train_models(
                 "pipeline_type": pipeline_config.pipeline_type,
             })
 
+            mlflow.log_param("feature_count", X_train.shape[1])
+            if boxcox_lambda is not None:
+                mlflow.log_param("boxcox_lambda", boxcox_lambda)
             model.fit(X_train, y_train)
-            metrics = _log_metrics(model, X_train, y_train, X_test, y_test)
+            metrics, test_pred = _log_metrics(model, X_train, y_train, X_test, y_test)
 
             try:
                 mlflow.sklearn.log_model(model, artifact_path="model")
             except Exception as e:
                 logger.warning("Could not log %s to MLflow: %s", model_cfg.name, e)
+
+            # Populate the MLflow Evaluate tab with pre-computed predictions.
+            # model=None + predictions= skips model reloading and SHAP (shap not installed).
+            try:
+                eval_df = X_test.copy()
+                eval_df["prediction"] = test_pred.values
+                eval_df[target_col] = y_test.values
+                mlflow.evaluate(
+                    model=None,
+                    data=eval_df,
+                    targets=target_col,
+                    predictions="prediction",
+                    model_type="regressor",
+                )
+            except Exception as e:
+                logger.warning("mlflow.evaluate skipped for %s: %s", model_cfg.name, e)
 
             mlflow_run_id = mlflow.active_run().info.run_id
 

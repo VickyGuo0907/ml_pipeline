@@ -52,18 +52,21 @@ End-to-end machine learning pipeline demonstrating orchestration, validation, tr
 
 ## Pipeline Architecture
 
-### Stages (10 tasks — stages 6 and 6b run in parallel)
+### Stages (7 core + 3 optional — stages 6 and 6b run in parallel)
 
+**Core tasks (always run):**
 1. **ingest** — Move files from `data/<pipeline>/landing` to `data/<pipeline>/raw/<run_id>`, write `manifest.yaml`
 2. **validate_raw** — Pandera schema check per source file; rules (required columns, bounds, min rows) from `pipeline.yaml`
-3. **profile** — ydata-profiling HTML reports per source
-4. **clean** — Type coercion, sentinel replacement, missing value imputation, deduplication → `data/<pipeline>/interim/<run_id>`
-5. **feature_engineer** — Pivot-join assembly, encoding, NZV filter, Box-Cox, VIF pruning, scaling, train/test split
-6. **validate_features** *(parallel)* — Row count ≥ 100, all-numeric guard, Pandera check on target column (config-driven from `pipeline.yaml`)
-7. **unsupervised_explore** *(parallel with 6)* — PCA + k-means hospital segmentation; algorithm and `max_k` config-driven; writes YAML report; does not feed into training
-8. **train** — sklearn Ridge + LightGBM, log metrics to MLflow
-9. **register** — Register both models to MLflow Staging (no auto-promotion); refuses if `test_rmse` is invalid or `test_r2 < -1.0`
-10. **drift_report** — Evidently AI drift monitoring (current vs previous training set)
+3. **clean** — Type coercion, sentinel replacement, missing value imputation, deduplication → `data/<pipeline>/interim/<run_id>`
+4. **feature_engineer** — Pivot-join assembly, encoding, NZV filter, Box-Cox, VIF pruning, scaling, train/test split
+5. **validate_features** *(parallel with 6b when enabled)* — Row count ≥ 100, all-numeric guard, Pandera check on target column (config-driven from `pipeline.yaml`)
+6. **train** — All models from `models.yaml`, log metrics to MLflow
+7. **register** — Register models to MLflow Staging (no auto-promotion); refuses if `test_rmse` is invalid or `test_r2 < -1.0`
+
+**Optional tasks (controlled by `tasks.enabled` in `orchestration.yaml`):**
+- **profile** *(after validate_raw)* — ydata-profiling HTML reports per source; set `profile: false` to skip
+- **unsupervised_explore** *(parallel with validate_features)* — PCA + k-means segmentation; algorithm and `max_k` config-driven via `pipeline.yaml`; writes YAML report; does not feed into training; set `unsupervised_explore: false` to skip
+- **drift_report** *(after register)* — Evidently AI drift monitoring (current vs previous training set); set `drift_report: false` to skip
 
 ### Data Flow
 
@@ -97,7 +100,7 @@ mlflow-artifacts/
 All config in `config/` directory, validated via Pydantic models:
 
 - `config/base/defaults.yaml` — Shared defaults (retries, MLflow URI) inherited by all pipelines
-- `config/<pipeline>/orchestration.yaml` — Per-pipeline DAG settings (dag_id, schedule, directories, `reports_base_url`)
+- `config/<pipeline>/orchestration.yaml` — Per-pipeline DAG settings (dag_id, schedule, directories, `reports_base_url`); `tasks.retries` / `retry_delay_minutes`; `tasks.enabled.profile` / `unsupervised_explore` / `drift_report` — set any to `false` to drop that optional task from the DAG
 - `config/<pipeline>/pipeline.yaml` — Sources, target, problem type, split ratio; `validation.sentinel_values` (dataset-specific missing-value strings); `validation.per_file_schemas` (per-file required columns and bounds); `unsupervised` (enable/disable PCA and clustering, set `max_k`)
 - `config/<pipeline>/cleaning.yaml` — Data cleaning recipes (impute strategy, protect columns, drop patterns)
 - `config/<pipeline>/features.yaml` — Feature engineering (encoding, join strategy, NZV filter, VIF threshold, scaling)
@@ -198,12 +201,13 @@ Place CSV or Parquet files in `data/biomedical_clinical/landing/` before running
 5. **Pivot-join feature assembly:** `features.yaml` join strategy config filters and pivots multi-source files onto a spine; no code changes needed to add join sources
 6. **VIF pruning is optional:** Set `vif_threshold: null` in `features.yaml` to skip VIF pruning for datasets with intentionally correlated predictors (e.g. HCAHPS survey questions)
 7. **Config-driven unsupervised exploration:** Stage 06b algorithm (kmeans/skip), PCA toggle, and `max_k` are all in `pipeline.yaml`; different datasets can disable or tune without touching code
-8. **No auto-promotion:** Manual MLflow UI click to move models to Production
-8. **LocalExecutor:** Single-machine orchestration (suitable for POC)
-9. **Separate Postgres:** Airflow metadata and MLflow tracking use distinct databases
-10. **Read-only MLflow artifacts:** FastAPI mounts artifacts as read-only
-11. **On-demand drift:** Drift monitoring runs inside training DAG as final task
-12. **Reports server:** nginx container at `:8888` serves `reports/` with directory listing; URL per pipeline set in `orchestration.yaml` (`reports_base_url`); Airflow task "Docs" tab links directly to it
+8. **Config-driven optional tasks:** `profile`, `unsupervised_explore`, and `drift_report` are toggled per pipeline via `tasks.enabled` in `orchestration.yaml`; `dag_factory.py` only creates and wires a task when its flag is `true` — no Python changes needed to trim the DAG for a new pipeline
+9. **No auto-promotion:** Manual MLflow UI click to move models to Production
+10. **LocalExecutor:** Single-machine orchestration (suitable for POC)
+11. **Separate Postgres:** Airflow metadata and MLflow tracking use distinct databases
+12. **Read-only MLflow artifacts:** FastAPI mounts artifacts as read-only
+13. **On-demand drift:** Drift monitoring runs inside training DAG as final optional task
+14. **Reports server:** nginx container at `:8888` serves `reports/` with directory listing; URL per pipeline set in `orchestration.yaml` (`reports_base_url`); Airflow task "Docs" tab links directly to it
 
 ## Troubleshooting
 

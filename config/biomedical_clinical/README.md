@@ -113,8 +113,8 @@ K-means clustering (optimal k=2):
 
 | File | Purpose |
 |------|---------|
-| `pipeline.yaml` | Target column, train/test split, validation rules, unsupervised config |
+| `orchestration.yaml` | Airflow DAG schedule, data directories, task retries; `tasks.enabled` flags for optional tasks (profile, unsupervised_explore, drift_report) |
+| `pipeline.yaml` | Target column, train/test split, validation rules (sentinel values, per-file schemas), unsupervised config (PCA, k-means) |
 | `cleaning.yaml` | Sentinel replacement, column drops, imputation strategy |
-| `features.yaml` | Pivot-join strategy, encoding, Box-Cox, drop columns |
-| `models.yaml` | Ridge and LightGBM hyperparameters |
-| `orchestration.yaml` | Airflow DAG schedule, data directories |
+| `features.yaml` | Pivot-join strategy, encoding, Box-Cox, VIF threshold, scaling |
+| `models.yaml` | Hyperparameters for all 6 models (OLS, Elastic Net, Ridge, LASSO, Random Forest, LightGBM) |

@@ -11,6 +11,10 @@
 random_state: 42
 train_test_split: 0.81
 
+evaluation:
+  min_test_r2: 0.0      # reject models worse than predicting the mean
+  max_test_rmse: 0.10   # reject if RMSE > 0.10 (~2× the best observed 0.053)
+
 models:
   # Pure linear baseline — no regularization, establishes minimum R²
   - name: "ols_baseline"
@@ -32,14 +36,17 @@ models:
       alpha: 1.0
       fit_intercept: true
 
-  # L1 regularization — drives low-signal HCAHPS features toward zero
+  # L1 regularization — alpha reduced from 0.01 (zeroed too many features, test R²<0)
+  # to 0.001 so feature selection is gentle enough on a 10-feature, weak-signal matrix
   - name: "lasso_l1"
     type: "lasso"
     hyperparameters:
-      alpha: 0.01
+      alpha: 0.001
       max_iter: 2000
 
-  # Non-linear baseline — tests whether tree splits reveal structure linear models miss
+  # Non-linear baseline — kept for educational comparison only.
+  # With 10 features and weak signal this overfits severely (train R²=0.84, test R²=0.006).
+  # The contrast with LightGBM shows why regularized boosting beats unconstrained trees here.
   - name: "random_forest"
     type: "random_forest"
     hyperparameters:

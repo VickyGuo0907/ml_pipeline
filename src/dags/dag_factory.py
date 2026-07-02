@@ -31,6 +31,19 @@ from src.validate import validate_raw_files  # noqa: E402
 import pandas as pd  # noqa: E402
 from src.schemas.features import build_features_schema  # noqa: E402
 
+# Single source of truth for task IDs — used in both task_id= definitions
+# and xcom_pull(task_ids=...) calls so renaming a task never silently breaks XCom.
+_TASK_INGEST = "01_ingest_files"
+_TASK_VALIDATE_RAW = "02_validate_raw_schema"
+_TASK_PROFILE = "03_profile_data"
+_TASK_CLEAN = "04_clean_data"
+_TASK_FEATURES = "05_engineer_features"
+_TASK_VALIDATE_FEATURES = "06_validate_features_schema"
+_TASK_EXPLORE = "06b_unsupervised_explore"
+_TASK_TRAIN = "07_train_models"
+_TASK_REGISTER = "08_register_to_mlflow"
+_TASK_DRIFT = "09_drift_report"
+
 
 def build_dag(config: OrchestrationConfig) -> DAG:
     """Build a complete pipeline DAG from an orchestration config.
@@ -62,7 +75,7 @@ def build_dag(config: OrchestrationConfig) -> DAG:
     def _pull_run_id(context: dict) -> str:
         """Pull run_id pushed by the ingest task."""
         ti: TaskInstance = context["task_instance"]
-        return ti.xcom_pull(task_ids="01_ingest_files", key="run_id")
+        return ti.xcom_pull(task_ids=_TASK_INGEST, key="run_id")
 
     def ingest_wrapper(**context) -> dict:
         """Ingest data and push run_id to cross-task storage."""
@@ -151,12 +164,15 @@ def build_dag(config: OrchestrationConfig) -> DAG:
         return result
 
     def register_wrapper(**context) -> dict:
-        """Register all trained models to MLflow Staging."""
+        """Evaluate models against thresholds and register passing ones to MLflow Staging."""
         ti: TaskInstance = context["task_instance"]
-        mlflow_run_ids = ti.xcom_pull(task_ids="07_train_models", key="mlflow_run_ids")
+        mlflow_run_ids = ti.xcom_pull(task_ids=_TASK_TRAIN, key="mlflow_run_ids")
         return register_models_to_mlflow(
             mlflow_tracking_uri=config.mlflow.tracking_uri,
             mlflow_run_ids=mlflow_run_ids,
+            config_dir=config.directories.config,
+            run_id=_pull_run_id(context),
+            reports_dir=config.directories.reports,
         )
 
     def drift_wrapper(**context) -> dict:
@@ -172,70 +188,79 @@ def build_dag(config: OrchestrationConfig) -> DAG:
         )
 
     _reports_url = config.directories.reports_base_url
+    _enabled = config.tasks.enabled
 
     with dag:
+        # --- Always-required tasks ---
         ingest_task = PythonOperator(
-            task_id="01_ingest_files",
+            task_id=_TASK_INGEST,
             python_callable=ingest_wrapper,
-
         )
         validate_raw_task = PythonOperator(
-            task_id="02_validate_raw_schema",
+            task_id=_TASK_VALIDATE_RAW,
             python_callable=validate_raw_wrapper,
-
-        )
-        profile_task = PythonOperator(
-            task_id="03_profile_data",
-            python_callable=profile_wrapper,
-            doc_md=f"## Data Profile Reports\n\n[Open reports →]({_reports_url}/)",
         )
         clean_task = PythonOperator(
-            task_id="04_clean_data",
+            task_id=_TASK_CLEAN,
             python_callable=clean_wrapper,
-
         )
         feature_task = PythonOperator(
-            task_id="05_engineer_features",
+            task_id=_TASK_FEATURES,
             python_callable=features_wrapper,
-
         )
         validate_features_task = PythonOperator(
-            task_id="06_validate_features_schema",
+            task_id=_TASK_VALIDATE_FEATURES,
             python_callable=validate_features_wrapper,
-
-        )
-        explore_task = PythonOperator(
-            task_id="06b_unsupervised_explore",
-            python_callable=explore_wrapper,
-            doc_md=f"## Unsupervised Analysis Reports\n\n[Open reports →]({_reports_url}/)",
         )
         train_task = PythonOperator(
-            task_id="07_train_models",
+            task_id=_TASK_TRAIN,
             python_callable=train_wrapper,
-
             retries=config.tasks.train_models_retries,
         )
         register_task = PythonOperator(
-            task_id="08_register_to_mlflow",
+            task_id=_TASK_REGISTER,
             python_callable=register_wrapper,
-
-        )
-        drift_task = PythonOperator(
-            task_id="09_drift_report",
-            python_callable=drift_wrapper,
-            doc_md=f"## Drift Report\n\n[Open reports →]({_reports_url}/)",
         )
 
-        # Pipeline flow — explore runs in parallel with validate_features
-        (
-            ingest_task
-            >> validate_raw_task
-            >> profile_task
-            >> clean_task
-            >> feature_task
-            >> [validate_features_task, explore_task]
-        )
-        validate_features_task >> train_task >> register_task >> drift_task
+        # --- Optional tasks (controlled by orchestration.yaml tasks.enabled) ---
+        if _enabled.profile:
+            profile_task = PythonOperator(
+                task_id=_TASK_PROFILE,
+                python_callable=profile_wrapper,
+                doc_md=f"## Data Profile Reports\n\n[Open reports →]({_reports_url}/)",
+            )
+
+        if _enabled.unsupervised_explore:
+            explore_task = PythonOperator(
+                task_id=_TASK_EXPLORE,
+                python_callable=explore_wrapper,
+                doc_md=f"## Unsupervised Analysis Reports\n\n[Open reports →]({_reports_url}/)",
+            )
+
+        if _enabled.drift_report:
+            drift_task = PythonOperator(
+                task_id=_TASK_DRIFT,
+                python_callable=drift_wrapper,
+                doc_md=f"## Drift Report\n\n[Open reports →]({_reports_url}/)",
+            )
+
+        # --- Dependency wiring ---
+        # Core: ingest → validate_raw → [profile?] → clean → features
+        chain = ingest_task >> validate_raw_task
+        if _enabled.profile:
+            chain = chain >> profile_task
+        chain = chain >> clean_task >> feature_task
+
+        # After features: explore runs in parallel with validate_features when enabled
+        if _enabled.unsupervised_explore:
+            chain >> [validate_features_task, explore_task]
+        else:
+            chain >> validate_features_task
+
+        # Core training chain: validate_features → train → register → [drift?]
+        end = validate_features_task >> train_task >> register_task
+        if _enabled.drift_report:
+            end >> drift_task
 
     return dag
 

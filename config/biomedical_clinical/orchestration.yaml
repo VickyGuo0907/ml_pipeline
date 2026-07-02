@@ -9,6 +9,15 @@ dag:
     - biomedical
     - clinical
 
+tasks:
+  retries: 1
+  retry_delay_minutes: 5
+  train_models_retries: 0
+  enabled:
+    profile: true            # ydata-profiling HTML per source file
+    unsupervised_explore: true   # PCA + k-means hospital segmentation
+    drift_report: true       # Evidently drift vs previous training set
+
 directories:
   landing: data/biomedical_clinical/landing
   raw: data/biomedical_clinical/raw

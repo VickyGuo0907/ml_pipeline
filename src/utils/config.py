@@ -235,12 +235,31 @@ class ModelConfig(BaseModel):
     )
 
 
+class EvaluationConfig(BaseModel):
+    """Quality thresholds for the model registration gate.
+
+    Models that fail any configured threshold are skipped (not registered) and
+    recorded in the evaluation report as 'rejected'. Set a threshold to null to
+    disable it.
+    """
+
+    min_test_r2: float | None = Field(
+        default=None,
+        description="Minimum acceptable test R². Models below are rejected.",
+    )
+    max_test_rmse: float | None = Field(
+        default=None,
+        description="Maximum acceptable test RMSE. Models above are rejected.",
+    )
+
+
 class ModelsConfig(BaseModel):
     """Models configuration."""
 
     models: list[ModelConfig] = Field(..., description="Model definitions")
     random_state: int = Field(default=42)
     train_test_split: float = Field(default=0.8, ge=0.0, le=1.0)
+    evaluation: EvaluationConfig = Field(default_factory=EvaluationConfig)
 
 
 class OrchestrationDAGConfig(BaseModel):
@@ -258,12 +277,26 @@ class OrchestrationDAGConfig(BaseModel):
     tags: list[str] = Field(default_factory=lambda: ["ml", "production"], description="DAG tags")
 
 
+class TasksEnabledConfig(BaseModel):
+    """Enable/disable flags for optional pipeline tasks.
+
+    Core tasks (ingest, validate_raw, clean, features, validate_features, train, register)
+    are always required and cannot be disabled. These flags control the optional tasks
+    that add observability but do not feed into the training path.
+    """
+
+    profile: bool = Field(default=True, description="Run ydata-profiling HTML report per source")
+    unsupervised_explore: bool = Field(default=True, description="Run PCA + k-means analysis")
+    drift_report: bool = Field(default=True, description="Run Evidently drift monitoring")
+
+
 class OrchestrationTaskConfig(BaseModel):
     """Task-level orchestration settings."""
 
     retries: int = Field(default=1, description="Default task retries")
     retry_delay_minutes: int = Field(default=5, description="Retry delay in minutes")
     train_models_retries: int = Field(default=0, description="Train models task retries")
+    enabled: TasksEnabledConfig = Field(default_factory=TasksEnabledConfig)
 
 
 class OrchestrationDirectoriesConfig(BaseModel):

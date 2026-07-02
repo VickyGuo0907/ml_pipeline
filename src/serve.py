@@ -1,10 +1,23 @@
-"""FastAPI serving endpoint for ML model predictions."""
+"""FastAPI serving endpoint for ML model predictions.
+
+Model loading order:
+  1. Try Production stage for the configured model name
+  2. Fall back to Staging (useful during development before manual promotion)
+
+Predictions are inverse Box-Cox transformed back to the original
+Excess Readmission Ratio scale using the lambda logged during training.
+
+Environment variables:
+  MLFLOW_TRACKING_URI  — MLflow server (default: http://mlflow-server:5000)
+  SERVING_MODEL_NAME   — which registered model to serve (default: lightgbm_gbm)
+"""
 import logging
 import os
 from contextlib import asynccontextmanager
-from typing import Optional
+from typing import Any, Optional
 
 import mlflow
+import mlflow.pyfunc
 import pandas as pd
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
@@ -12,162 +25,244 @@ from pydantic import BaseModel, ConfigDict, Field
 logger = logging.getLogger(__name__)
 
 MLFLOW_TRACKING_URI = os.environ.get("MLFLOW_TRACKING_URI", "http://mlflow-server:5000")
+SERVING_MODEL_NAME = os.environ.get("SERVING_MODEL_NAME", "lightgbm_gbm")
 
-# Global model cache
-_model_cache: dict = {"model": None}
+# Actual feature column names as produced by the feature engineering stage.
+# Order must match the training feature matrix (X_train column order).
+_FEATURE_COLUMNS = [
+    "State",
+    "Care transition",
+    "Cleanliness",
+    "Communication about medicines",
+    "Discharge information",
+    "Doctor communication",
+    "Nurse communication",
+    "Overall hospital rating",
+    "Quietness",
+    "Recommend hospital",
+    "Staff responsiveness",
+]
+
+# Global model cache — populated on startup
+_model_cache: dict[str, Any] = {
+    "model": None,
+    "model_name": None,
+    "model_version": None,
+    "model_stage": None,
+    "boxcox_lambda": None,
+}
 
 
-def load_production_model() -> object | None:
-    """Load Production model from MLflow registry."""
-    try:
-        mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
-        client = mlflow.tracking.MlflowClient(tracking_uri=MLFLOW_TRACKING_URI)
-        for registered_model in client.search_registered_models():
-            for version in registered_model.latest_versions:
-                if version.current_stage == "Production":
-                    model_uri = f"models:/{registered_model.name}/Production"
-                    model = mlflow.pyfunc.load_model(model_uri)
-                    logger.info("Loaded Production model: %s", registered_model.name)
-                    return model
-        logger.warning("No Production model found in registry")
-        return None
-    except Exception as e:
-        logger.error("Failed to load Production model: %s", e)
-        return None
+def _load_model(model_name: str) -> dict[str, Any] | None:
+    """Load model from MLflow registry, trying Production then Staging.
+
+    Args:
+        model_name: Registered model name (from SERVING_MODEL_NAME env var).
+
+    Returns:
+        Dict with model, version, stage, and boxcox_lambda — or None if not found.
+    """
+    mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
+    client = mlflow.tracking.MlflowClient(tracking_uri=MLFLOW_TRACKING_URI)
+
+    for stage in ("Production", "Staging"):
+        try:
+            versions = client.get_latest_versions(model_name, stages=[stage])
+            if not versions:
+                continue
+
+            version = versions[0]
+            model_uri = f"models:/{model_name}/{stage}"
+            model = mlflow.pyfunc.load_model(model_uri)
+
+            # Retrieve Box-Cox lambda logged by train.py for inverse transform
+            boxcox_lambda: float | None = None
+            try:
+                run = client.get_run(version.run_id)
+                lambda_str = run.data.params.get("boxcox_lambda")
+                if lambda_str is not None:
+                    boxcox_lambda = float(lambda_str)
+            except Exception as e:
+                logger.warning("Could not retrieve boxcox_lambda from run: %s", e)
+
+            logger.info(
+                "Loaded %s v%s from %s (boxcox_lambda=%s)",
+                model_name, version.version, stage, boxcox_lambda,
+            )
+            return {
+                "model": model,
+                "model_name": model_name,
+                "model_version": version.version,
+                "model_stage": stage,
+                "boxcox_lambda": boxcox_lambda,
+            }
+        except Exception as e:
+            logger.debug("No %s model for %s: %s", stage, model_name, e)
+            continue
+
+    logger.warning("No Production or Staging model found for '%s'", model_name)
+    return None
+
+
+def _inverse_boxcox(value: float, lam: float) -> float:
+    """Inverse Box-Cox transform to return prediction to original ERR scale.
+
+    Args:
+        value: Box-Cox transformed prediction.
+        lam: Box-Cox lambda used during feature engineering.
+
+    Returns:
+        Prediction in original Excess Readmission Ratio scale (clamped to ≥ 0).
+    """
+    if lam == 0:
+        import math
+        return math.exp(value)
+    return max(0.0, (value * lam + 1) ** (1.0 / lam))
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Load model on startup."""
-    _model_cache["model"] = load_production_model()
+    """Load model on startup, release on shutdown."""
+    result = _load_model(SERVING_MODEL_NAME)
+    if result:
+        _model_cache.update(result)
     yield
+    _model_cache.clear()
 
 
-app = FastAPI(title="ML Pipeline Server", lifespan=lifespan)
+app = FastAPI(
+    title="ML Pipeline Prediction Server",
+    description=(
+        "Serves the hospital readmission prediction model from MLflow. "
+        "Feature inputs must be StandardScaler-normalized (z-scores) as produced "
+        "by the pipeline's feature engineering stage. "
+        "Predictions are returned in original Excess Readmission Ratio scale "
+        "via inverse Box-Cox transform."
+    ),
+    lifespan=lifespan,
+)
 
 
 class HealthResponse(BaseModel):
     """Health check response."""
+
     status: str
     model_loaded: bool
+    model_name: Optional[str] = None
+    model_version: Optional[str] = None
+    model_stage: Optional[str] = None
 
 
 class PredictionInput(BaseModel):
-    """Feature input for model prediction."""
+    """Scaled HCAHPS feature inputs (StandardScaler z-scores from feature engineering).
+
+    All values are z-scores (mean=0, std=1) as output by the pipeline's
+    StandardScaler. Positive = above average, negative = below average.
+    """
+
     model_config = ConfigDict(
         json_schema_extra={
             "example": {
-                "state_encoded": 1,
-                "facility_id_encoded": 42,
-                "compared_to_national_mortality_below": 1,
-                "compared_to_national_mortality_same": 0,
-                "compared_to_national_mortality_above": 0,
-                "compared_to_national_safety_below": 0,
-                "compared_to_national_safety_same": 1,
-                "compared_to_national_safety_above": 0,
-                "compared_to_national_readmission_below": 0,
-                "compared_to_national_readmission_same": 0,
-                "compared_to_national_readmission_above": 1,
-                "mortality_rate": 12.5,
-                "hcahps_cleanliness": 75.0,
-                "hcahps_communication": 80.0,
-                "hcahps_responsiveness": 70.0,
-                "hcahps_pain_management": 72.0,
-                "hcahps_medication": 68.0,
-                "hcahps_discharge": 74.0,
-                "hcahps_quiet": 71.0,
-                "number_of_beds": 150.0,
+                "state": 0.5,
+                "care_transition": -0.3,
+                "cleanliness": 0.8,
+                "communication_about_medicines": 0.2,
+                "discharge_information": -0.1,
+                "doctor_communication": 0.6,
+                "nurse_communication": 0.4,
+                "overall_hospital_rating": -0.2,
+                "quietness": 0.1,
+                "recommend_hospital": 0.3,
+                "staff_responsiveness": -0.5,
             }
         }
     )
 
-    state_encoded: int
-    facility_id_encoded: int
-    compared_to_national_mortality_below: int
-    compared_to_national_mortality_same: int
-    compared_to_national_mortality_above: int
-    compared_to_national_safety_below: int
-    compared_to_national_safety_same: int
-    compared_to_national_safety_above: int
-    compared_to_national_readmission_below: int
-    compared_to_national_readmission_same: int
-    compared_to_national_readmission_above: int
-    mortality_rate: float
-    hcahps_cleanliness: float
-    hcahps_communication: float
-    hcahps_responsiveness: float
-    hcahps_pain_management: float
-    hcahps_medication: float
-    hcahps_discharge: float
-    hcahps_quiet: float
-    number_of_beds: float
-    hcahps_cleanliness_poly2: Optional[float] = None
-    hcahps_communication_poly2: Optional[float] = None
-    hcahps_cleanliness_communication: Optional[float] = None
+    state: float = Field(..., description="State (frequency-encoded, then z-scored)")
+    care_transition: float = Field(..., description="Care transition score (z-score)")
+    cleanliness: float = Field(..., description="Cleanliness score (z-score)")
+    communication_about_medicines: float = Field(..., description="Communication about medicines (z-score)")
+    discharge_information: float = Field(..., description="Discharge information score (z-score)")
+    doctor_communication: float = Field(..., description="Doctor communication score (z-score)")
+    nurse_communication: float = Field(..., description="Nurse communication score (z-score)")
+    overall_hospital_rating: float = Field(..., description="Overall hospital rating (z-score)")
+    quietness: float = Field(..., description="Quietness score (z-score)")
+    recommend_hospital: float = Field(..., description="Recommend hospital score (z-score)")
+    staff_responsiveness: float = Field(..., description="Staff responsiveness score (z-score)")
 
 
 class PredictionOutput(BaseModel):
-    """Model prediction output."""
-    prediction: float = Field(..., description="Predicted ExcessReadmissionRatio")
-    model_version: Optional[str] = None
+    """Prediction output."""
+
+    prediction: float = Field(
+        ...,
+        description="Excess Readmission Ratio (original scale, inverse Box-Cox applied)",
+    )
+    prediction_transformed: Optional[float] = Field(
+        None,
+        description="Raw model output in Box-Cox space (omitted if no lambda available)",
+    )
+    model_name: str
+    model_version: str
+    model_stage: str
 
 
 @app.get("/health", response_model=HealthResponse)
 async def health() -> HealthResponse:
-    """Health check endpoint."""
+    """Health check — reports model name, version, and stage."""
     return HealthResponse(
         status="healthy",
-        model_loaded=_model_cache["model"] is not None,
+        model_loaded=_model_cache.get("model") is not None,
+        model_name=_model_cache.get("model_name"),
+        model_version=_model_cache.get("model_version"),
+        model_stage=_model_cache.get("model_stage"),
     )
 
 
 @app.post("/predict", response_model=PredictionOutput)
 async def predict(data: PredictionInput) -> PredictionOutput:
-    """Make prediction using loaded model."""
-    if _model_cache["model"] is None:
+    """Predict Excess Readmission Ratio from scaled HCAHPS features."""
+    if _model_cache.get("model") is None:
         raise HTTPException(
             status_code=503,
-            detail="Model not loaded. Check MLflow registry for Production version.",
+            detail=(
+                f"No model loaded for '{SERVING_MODEL_NAME}'. "
+                "Promote a model to Production or Staging in MLflow first."
+            ),
         )
 
     try:
-        input_dict = data.model_dump()
-        feature_dict = {
-            "State_encoded": input_dict["state_encoded"],
-            "FacilityId_encoded": input_dict["facility_id_encoded"],
-            "ComparedToNational_Mortality_Below": input_dict["compared_to_national_mortality_below"],
-            "ComparedToNational_Mortality_Same": input_dict["compared_to_national_mortality_same"],
-            "ComparedToNational_Mortality_Above": input_dict["compared_to_national_mortality_above"],
-            "ComparedToNational_Safety_Below": input_dict["compared_to_national_safety_below"],
-            "ComparedToNational_Safety_Same": input_dict["compared_to_national_safety_same"],
-            "ComparedToNational_Safety_Above": input_dict["compared_to_national_safety_above"],
-            "ComparedToNational_Readmission_Below": input_dict["compared_to_national_readmission_below"],
-            "ComparedToNational_Readmission_Same": input_dict["compared_to_national_readmission_same"],
-            "ComparedToNational_Readmission_Above": input_dict["compared_to_national_readmission_above"],
-            "Mortality_Rate": input_dict["mortality_rate"],
-            "HCAHPS_Cleanliness": input_dict["hcahps_cleanliness"],
-            "HCAHPS_Communication": input_dict["hcahps_communication"],
-            "HCAHPS_Responsiveness": input_dict["hcahps_responsiveness"],
-            "HCAHPS_Pain_Management": input_dict["hcahps_pain_management"],
-            "HCAHPS_Medication": input_dict["hcahps_medication"],
-            "HCAHPS_Discharge": input_dict["hcahps_discharge"],
-            "HCAHPS_Quiet": input_dict["hcahps_quiet"],
-            "Number_of_Beds": input_dict["number_of_beds"],
+        # Map snake_case API fields → actual pipeline column names (spaces preserved)
+        feature_values = {
+            "State": data.state,
+            "Care transition": data.care_transition,
+            "Cleanliness": data.cleanliness,
+            "Communication about medicines": data.communication_about_medicines,
+            "Discharge information": data.discharge_information,
+            "Doctor communication": data.doctor_communication,
+            "Nurse communication": data.nurse_communication,
+            "Overall hospital rating": data.overall_hospital_rating,
+            "Quietness": data.quietness,
+            "Recommend hospital": data.recommend_hospital,
+            "Staff responsiveness": data.staff_responsiveness,
         }
+        input_df = pd.DataFrame([feature_values], columns=_FEATURE_COLUMNS)
+        raw_prediction = float(_model_cache["model"].predict(input_df)[0])
 
-        if input_dict["hcahps_cleanliness_poly2"] is not None:
-            feature_dict["HCAHPS_Cleanliness_poly2"] = input_dict["hcahps_cleanliness_poly2"]
-        if input_dict["hcahps_communication_poly2"] is not None:
-            feature_dict["HCAHPS_Communication_poly2"] = input_dict["hcahps_communication_poly2"]
-        if input_dict["hcahps_cleanliness_communication"] is not None:
-            feature_dict["HCAHPS_Cleanliness_Communication"] = input_dict["hcahps_cleanliness_communication"]
-
-        input_df = pd.DataFrame([feature_dict])
-        prediction = _model_cache["model"].predict(input_df)
+        # Inverse Box-Cox to return prediction in original ERR scale
+        boxcox_lambda = _model_cache.get("boxcox_lambda")
+        if boxcox_lambda is not None:
+            prediction_original = _inverse_boxcox(raw_prediction, boxcox_lambda)
+        else:
+            logger.warning("boxcox_lambda not available — returning raw prediction as-is")
+            prediction_original = raw_prediction
 
         return PredictionOutput(
-            prediction=float(prediction[0]),
-            model_version="Production",
+            prediction=prediction_original,
+            prediction_transformed=raw_prediction if boxcox_lambda is not None else None,
+            model_name=_model_cache["model_name"],
+            model_version=str(_model_cache["model_version"]),
+            model_stage=_model_cache["model_stage"],
         )
     except Exception as e:
         logger.error("Prediction failed: %s", e)
