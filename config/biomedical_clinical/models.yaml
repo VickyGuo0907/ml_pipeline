@@ -1,20 +1,23 @@
-# Healthcare pipeline model config
-# SVG Stage 3b + Stage 4: Supervised model comparison
+# Stage 07 — model training config for biomedical_clinical pipeline
 #
-# Model ladder (matches SVG):
-#   OLS baseline → Elastic Net → Ridge (multicollinearity) → LASSO (selection) → RF (non-linearity)
-#   + LightGBM (production-grade boosting, not in SVG but kept as best performer)
+# Model ladder: progressively more complex to find the performance ceiling.
+#   OLS (baseline) → Elastic Net → Ridge (multicollinearity) → LASSO (selection)
+#   → Random Forest (non-linearity) → LightGBM (production-grade boosting)
+#
+# All models are trained per run and registered to MLflow Staging.
+# Expected test R² ~0.04 with FY2024 HCAHPS + PN data (HCAHPS is a weak
+# predictor of readmission ratio; low R² is scientifically expected here).
 
 random_state: 42
 train_test_split: 0.81
 
 models:
-  # SVG Stage 3b: OLS baseline (pure linear, no regularization)
+  # Pure linear baseline — no regularization, establishes minimum R²
   - name: "ols_baseline"
     type: "ols"
     hyperparameters: {}
 
-  # SVG Stage 3b: Elastic Net (caret equivalent — best α=0,λ=0 → collapses to OLS)
+  # L1+L2 combined — alpha near zero collapses toward OLS on this dataset
   - name: "elastic_net"
     type: "elastic_net"
     hyperparameters:
@@ -22,21 +25,21 @@ models:
       l1_ratio: 0.5
       max_iter: 2000
 
-  # SVG Stage 4: Ridge tests multicollinearity (R²=0.349 in SVG)
+  # L2 regularization — handles HCAHPS multicollinearity better than OLS
   - name: "ridge_l2"
     type: "ridge"
     hyperparameters:
       alpha: 1.0
       fit_intercept: true
 
-  # SVG Stage 4: LASSO tests feature selection (R²=0.347, 1 zeroed in SVG)
+  # L1 regularization — drives low-signal HCAHPS features toward zero
   - name: "lasso_l1"
     type: "lasso"
     hyperparameters:
       alpha: 0.01
       max_iter: 2000
 
-  # SVG Stage 4: Random Forest breaks linear ceiling (R²=0.398, mtry=7 in SVG)
+  # Non-linear baseline — tests whether tree splits reveal structure linear models miss
   - name: "random_forest"
     type: "random_forest"
     hyperparameters:
@@ -45,7 +48,7 @@ models:
       random_state: 42
       n_jobs: -1
 
-  # LightGBM — production-grade, not in SVG but kept as best performer
+  # Gradient boosting — production-grade, typically best performer on tabular data
   - name: "lightgbm_gbm"
     type: "gbm"
     hyperparameters:
