@@ -1,5 +1,18 @@
 # ML Pipeline Architecture
 
+## Diagrams
+
+Visual, interactive versions of this document live in `diagrams/` (open any `.html` file directly
+in a browser — each has a dark/light toggle and PNG/SVG export built in):
+
+| File | Covers |
+|------|--------|
+| `diagrams/01-architecture.html` | Service map — Airflow, MLflow, FastAPI, Postgres instances, bind-mounted volumes |
+| `diagrams/02-data-flow.html` | Full data flow: landing → raw → interim → features → benchmark → train → register |
+| `diagrams/03-system-topology.html` | Docker Compose deployment zones, container mount points |
+| `diagrams/04-dag-task-graph.html` | The DAG's task graph — core spine, `tasks.enabled`-gated optional tasks, and the manual-trigger-only benchmark refresh |
+| `diagrams/05-champion-challenger-regression-check.html` | Champion tag + benchmark-based regression check + drift context, from the [design spec](docs/superpowers/specs/2026-07-03-champion-challenger-regression-check-design.md) |
+
 ## System Overview
 
 ```

@@ -135,7 +135,7 @@ regression without drift suggests the model itself regressed.
 
 See `docs/superpowers/specs/2026-07-03-champion-challenger-regression-check-design.md` for the
 full design rationale, or open
-`docs/superpowers/specs/diagrams/champion-challenger-regression-check.html` in a browser for a
+`diagrams/05-champion-challenger-regression-check.html` in a browser for a
 visual walkthrough of the data flow above.
 
 ### Configuration
