@@ -100,3 +100,28 @@ def write_manifest(run_dir: Path, data: dict[str, Any]) -> None:
     with open(manifest_path, "w") as f:
         yaml.dump(data, f, default_flow_style=False, sort_keys=False)
     logger.debug("Manifest written: %s", manifest_path)
+
+
+def find_previous_run_id(base_dir: str | Path, current_run_id: str) -> str | None:
+    """Find the most recent run directory strictly before current_run_id.
+
+    Run directories are named so that lexicographic order matches recency
+    (ISO dates like '2026-07-01' or Airflow logical dates both sort correctly
+    this way). Non-directory entries are ignored.
+
+    Args:
+        base_dir: Directory containing one subdirectory per run_id (e.g. a features_dir).
+        current_run_id: The run_id to find a predecessor for.
+
+    Returns:
+        The most recent run_id strictly before current_run_id, or None if
+        base_dir doesn't exist or no earlier run directory is found.
+    """
+    base_path = Path(base_dir)
+    if not base_path.exists():
+        return None
+    run_ids = sorted(
+        p.name for p in base_path.iterdir()
+        if p.is_dir() and p.name < current_run_id
+    )
+    return run_ids[-1] if run_ids else None
