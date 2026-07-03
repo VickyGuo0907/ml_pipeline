@@ -69,7 +69,7 @@ not a new pipeline.
 
 ## Pipeline Architecture
 
-### Stages (7 core + 4 optional — stages 6, 6b, and 6c run in parallel with validation)
+### Stages (7 core + 4 optional — stages 6 and 6b run in parallel; 6c is sequential, after 6 and before train)
 
 **Core tasks (always run):**
 1. **ingest** — Move files from `data/<pipeline>/landing` to `data/<pipeline>/raw/<run_id>`, write `manifest.yaml`
