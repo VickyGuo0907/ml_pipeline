@@ -83,8 +83,10 @@ not a new pipeline.
 **Optional tasks (controlled by `tasks.enabled` in `orchestration.yaml`):**
 - **profile** *(after validate_raw)* — ydata-profiling HTML reports per source; set `profile: false` to skip
 - **unsupervised_explore** *(parallel with validate_features)* — PCA + k-means segmentation; algorithm and `max_k` config-driven via `pipeline.yaml`; writes YAML report; does not feed into training; set `unsupervised_explore: false` to skip
-- **create_benchmark** *(after validate_features, before train)* — no-op on a normal scheduled run; trigger the DAG with `conf={"refresh_benchmark": true}` to snapshot the current run's training features as the new fixed benchmark set, used by the regression check below
 - **drift_report** *(after register)* — Evidently AI drift monitoring (current vs previous training set); set `drift_report: false` to skip
+
+**Always-present but usually a no-op:**
+- **create_benchmark** *(after validate_features, before train)* — unlike the tasks above, this isn't toggled via `tasks.enabled`; it's always in the DAG but does nothing on a normal scheduled run. Trigger the DAG with `conf={"refresh_benchmark": true}` to snapshot the current run's training features as the new fixed benchmark set, used by the regression check below.
 
 ### Data Flow
 
