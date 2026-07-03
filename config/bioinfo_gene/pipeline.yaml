@@ -24,3 +24,6 @@ validation:
     expression_level:
       min: 0.0
   min_rows: 1
+
+benchmark:
+  enabled: false
