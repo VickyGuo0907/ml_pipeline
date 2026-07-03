@@ -30,6 +30,16 @@ This spec addresses those three gaps. It explicitly does **not** attempt the lar
 production-readiness roadmap discussed alongside it (a live ground-truth feedback loop from
 `serve.py`, shadow/canary deployment) — that's a separate, larger piece of work.
 
+**Not auto-promotion.** The statistical rigor here is deliberately not used to automate the
+Staging→Production click, even though it technically could. A benchmark set that's only
+refreshed manually creates a Goodhart risk (a model can keep "winning" against an increasingly
+stale benchmark while real-world data drifts away — exactly what the drift flag exists to catch
+before a human, not an automated promoter, ever sees it), and there's no live feedback loop yet
+to catch a bad auto-promotion quickly. A reasonable future middle ground — *auto-flagging* a
+clear, significant, drift-free win as a `promotion_candidate` alias/notification without removing
+the human click — is worth revisiting once the ground-truth feedback loop exists, but is out of
+scope here.
+
 ## Non-goals
 
 - No change to promotion behavior. Promotion to Production remains a manual MLflow UI action —
