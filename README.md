@@ -69,7 +69,7 @@ not a new pipeline.
 
 ## Pipeline Architecture
 
-### Stages (7 core + 3 optional — stages 6 and 6b run in parallel)
+### Stages (7 core + 4 optional — stages 6, 6b, and 6c run in parallel with validation)
 
 **Core tasks (always run):**
 1. **ingest** — Move files from `data/<pipeline>/landing` to `data/<pipeline>/raw/<run_id>`, write `manifest.yaml`
@@ -116,7 +116,7 @@ mlflow-artifacts/
 ### Champion/Challenger & Regression Detection
 
 Each run's best-performing model (lowest `test_rmse`) is tagged `run_champion` in MLflow and
-recorded at the top of `reports/<pipeline>/<run_id>_evaluation.yaml`.
+recorded in `reports/<pipeline>/<run_id>_evaluation.yaml` as a top-level `run_champion` key.
 
 If a pipeline has `benchmark.enabled: true` in `pipeline.yaml` and a benchmark set has been
 created (see `create_benchmark` above), every newly registered model is also compared against
