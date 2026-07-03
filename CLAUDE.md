@@ -27,13 +27,16 @@ Build an end-to-end ML pipeline POC on local docker-compose, designed to demonst
 - **Testing scope:** pandera at every storage boundary + unit tests for clean/feature functions + one end-to-end integration test
 - **Host OS:** macOS
 
-## Pipeline stages (8, one DAG)
+## Pipeline stages (9, one DAG)
 1. ingest — move files from data/<pipeline>/landing to data/<pipeline>/raw/<run_id>, write manifest.yaml with checksums
 2. validate_raw — pandera schema check per source file
 3. profile — ydata-profiling HTML report per source
 4. clean — type coercion, missing handling, dedup → data/<pipeline>/interim/<run_id>/*.parquet
 5. feature_engineer — joins, encoding, NZV filter, train/test split → data/<pipeline>/features/<run_id>/{train,test}.parquet
 6. validate_features — pandera schema check on feature matrix
+6c. (optional, manual-trigger only) benchmark — snapshots the current run's training features as
+  a fixed evaluation set for champion/challenger regression checks; a no-op unless the DAG is
+  triggered with conf={"refresh_benchmark": true}
 7. train — sklearn + lightgbm, MLflow autolog, both models per run
 8. evaluate_and_register — compute metrics, register to MLflow Staging
 9. drift_report — Evidently HTML, compares current features to previous training set
@@ -51,7 +54,7 @@ ml-pipeline/
 ├── src/
 │   ├── dags/dag_factory.py
 │   ├── ingest.py, validate.py, profile.py, clean.py
-│   ├── features.py, train.py, evaluate.py
+│   ├── features.py, train.py, evaluate.py, benchmark.py
 │   ├── serve.py, monitoring.py
 │   ├── schemas/{raw.py, features.py}
 │   └── utils/{config.py, io.py}

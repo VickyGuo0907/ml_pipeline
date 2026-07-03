@@ -104,6 +104,20 @@ class UnsupervisedConfig(BaseModel):
     clustering: ClusteringConfig = Field(default_factory=ClusteringConfig)
 
 
+class BenchmarkConfig(BaseModel):
+    """Fixed benchmark dataset settings for champion/challenger comparison.
+
+    See docs/superpowers/specs/2026-07-03-champion-challenger-regression-check-design.md.
+    Disabled by default so pipelines that don't opt in behave exactly as before —
+    no benchmark directory expected, regression check skipped entirely.
+    """
+
+    enabled: bool = Field(
+        default=False,
+        description="Whether this pipeline maintains a fixed benchmark set for regression checks",
+    )
+
+
 class PipelineConfig(BaseModel):
     """Root pipeline configuration."""
 
@@ -122,6 +136,9 @@ class PipelineConfig(BaseModel):
     )
     unsupervised: UnsupervisedConfig = Field(
         default_factory=UnsupervisedConfig, description="Unsupervised exploration settings for Stage 06b"
+    )
+    benchmark: BenchmarkConfig = Field(
+        default_factory=BenchmarkConfig, description="Fixed benchmark set settings for Stage 06c"
     )
 
     @field_validator("sources")
@@ -282,6 +299,7 @@ class OrchestrationDirectoriesConfig(BaseModel):
     raw: str = Field(default="data/raw", description="Raw data directory")
     interim: str = Field(default="data/interim", description="Interim data directory")
     features: str = Field(default="data/features", description="Features directory")
+    benchmark: str = Field(default="data/benchmark", description="Fixed benchmark dataset directory")
     reports: str = Field(default="reports", description="Reports directory")
     config: str = Field(default="config", description="Configuration directory")
     reports_base_url: str = Field(

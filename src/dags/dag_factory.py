@@ -12,11 +12,13 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from datetime import datetime, timedelta  # noqa: E402
+import logging  # noqa: E402
 
 from airflow import DAG  # noqa: E402
 from airflow.models import TaskInstance  # noqa: E402
 from airflow.operators.python import PythonOperator  # noqa: E402
 
+from src.benchmark import create_benchmark_snapshot  # noqa: E402
 from src.clean import clean_raw_data  # noqa: E402
 from src.evaluate import register_models_to_mlflow  # noqa: E402
 from src.explore import run_unsupervised_analysis  # noqa: E402
@@ -26,10 +28,13 @@ from src.monitoring import generate_drift_report  # noqa: E402
 from src.profile import profile_raw_files  # noqa: E402
 from src.train import train_models  # noqa: E402
 from src.utils.config import OrchestrationConfig, discover_pipelines, load_pipeline_config, load_pipeline_orchestration_config  # noqa: E402
+from src.utils.io import find_previous_run_id  # noqa: E402
 from src.validate import validate_raw_files  # noqa: E402
 
 import pandas as pd  # noqa: E402
 from src.schemas.features import build_features_schema  # noqa: E402
+
+logger = logging.getLogger(__name__)
 
 # Single source of truth for task IDs — used in both task_id= definitions
 # and xcom_pull(task_ids=...) calls so renaming a task never silently breaks XCom.
@@ -40,6 +45,7 @@ _TASK_CLEAN = "04_clean_data"
 _TASK_FEATURES = "05_engineer_features"
 _TASK_VALIDATE_FEATURES = "06_validate_features_schema"
 _TASK_EXPLORE = "06b_unsupervised_explore"
+_TASK_BENCHMARK = "06c_create_benchmark"
 _TASK_TRAIN = "07_train_models"
 _TASK_REGISTER = "08_register_to_mlflow"
 _TASK_DRIFT = "09_drift_report"
@@ -150,6 +156,20 @@ def build_dag(config: OrchestrationConfig) -> DAG:
             reports_dir=config.directories.reports,
         )
 
+    def benchmark_wrapper(**context) -> dict:
+        """Refresh the fixed benchmark set — no-op unless triggered with conf.refresh_benchmark."""
+        conf = context["dag_run"].conf or {}
+        if not conf.get("refresh_benchmark", False):
+            logger.info(
+                "Skipping benchmark refresh — trigger with conf={'refresh_benchmark': true} to refresh"
+            )
+            return {"skipped": True}
+        return create_benchmark_snapshot(
+            features_dir=config.directories.features,
+            run_id=_pull_run_id(context),
+            benchmark_dir=config.directories.benchmark,
+        )
+
     def train_wrapper(**context) -> dict:
         """Train all models and log R² + RMSE to MLflow."""
         result = train_models(
@@ -173,6 +193,8 @@ def build_dag(config: OrchestrationConfig) -> DAG:
             config_dir=config.directories.config,
             run_id=_pull_run_id(context),
             reports_dir=config.directories.reports,
+            features_dir=config.directories.features,
+            benchmark_dir=config.directories.benchmark,
         )
 
     def drift_wrapper(**context) -> dict:
@@ -180,10 +202,11 @@ def build_dag(config: OrchestrationConfig) -> DAG:
         run_id = _pull_run_id(context)
         if not run_id:
             raise ValueError(f"[{config.dag.dag_id}] run_id not found in cross-task storage")
+        previous_run_id = find_previous_run_id(config.directories.features, run_id)
         return generate_drift_report(
             features_dir=config.directories.features,
             run_id=run_id,
-            previous_run_id=None,
+            previous_run_id=previous_run_id,
             reports_dir=config.directories.reports,
         )
 
@@ -216,6 +239,16 @@ def build_dag(config: OrchestrationConfig) -> DAG:
             task_id=_TASK_TRAIN,
             python_callable=train_wrapper,
             retries=config.tasks.train_models_retries,
+        )
+        benchmark_task = PythonOperator(
+            task_id=_TASK_BENCHMARK,
+            python_callable=benchmark_wrapper,
+            doc_md=(
+                "## Benchmark Snapshot\n\n"
+                "No-op on a normal scheduled run. Trigger this DAG with "
+                "`conf={\"refresh_benchmark\": true}` to refresh the fixed "
+                "benchmark set used for champion/challenger regression checks."
+            ),
         )
         register_task = PythonOperator(
             task_id=_TASK_REGISTER,
@@ -257,8 +290,8 @@ def build_dag(config: OrchestrationConfig) -> DAG:
         else:
             chain >> validate_features_task
 
-        # Core training chain: validate_features → train → register → [drift?]
-        end = validate_features_task >> train_task >> register_task
+        # Core training chain: validate_features → benchmark → train → register → [drift?]
+        end = validate_features_task >> benchmark_task >> train_task >> register_task
         if _enabled.drift_report:
             end >> drift_task
 

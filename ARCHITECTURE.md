@@ -530,14 +530,16 @@ config/base/defaults.yaml (shared across all pipelines)
 └─ mlflow: tracking URI (http://mlflow-server:5000)
 
 config/<pipeline>/ (one directory per pipeline, e.g. biomedical_clinical, bioinfo_gene)
-├─ orchestration.yaml  (dag_id, schedule, tags, data directories, reports_base_url — overrides base defaults;
+├─ orchestration.yaml  (dag_id, schedule, tags, data directories (including directories.benchmark for
+│                       fixed benchmark set location), reports_base_url — overrides base defaults;
 │                       tasks.retries / retry_delay_minutes / train_models_retries;
 │                       tasks.enabled.profile / unsupervised_explore / drift_report —
 │                       set to false to drop optional tasks from the DAG entirely)
 ├─ pipeline.yaml       (target, sources, problem type, split ratio;
 │                       validation.sentinel_values — dataset missing-value strings;
 │                       validation.per_file_schemas — per-file required columns and numeric bounds;
-│                       unsupervised.enabled / pca.enabled / clustering.algorithm+max_k — Stage 06b)
+│                       unsupervised.enabled / pca.enabled / clustering.algorithm+max_k — Stage 06b;
+│                       benchmark.enabled — opt into the fixed benchmark set for champion/challenger regression checks)
 ├─ cleaning.yaml       (impute_strategy, protect_columns, drop_column_patterns)
 ├─ features.yaml       (encoding, join_strategy for pivot-join, nzv_threshold,
 │                       vif_threshold (null to skip), boxcox_target, scale)
@@ -660,6 +662,10 @@ NO AUTOMATIC PROMOTION TO PRODUCTION
 Every model registers to Staging only.
 Manual UI click required to move to Production.
 This prevents surprises in production.
+
+✓ Champion/challenger regression detection compares each new model against its own Production
+  version on a fixed, manually-refreshed benchmark set via bootstrapped confidence intervals —
+  informational only, never blocks Staging registration or triggers promotion
 ```
 
 ---

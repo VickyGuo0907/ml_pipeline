@@ -23,5 +23,6 @@ directories:
   raw: data/bioinfo_gene/raw
   interim: data/bioinfo_gene/interim
   features: data/bioinfo_gene/features
+  benchmark: data/bioinfo_gene/benchmark
   reports: reports/bioinfo_gene
   config: config/bioinfo_gene

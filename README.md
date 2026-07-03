@@ -69,7 +69,7 @@ not a new pipeline.
 
 ## Pipeline Architecture
 
-### Stages (7 core + 3 optional — stages 6 and 6b run in parallel)
+### Stages (7 core + 4 optional — stages 6 and 6b run in parallel; 6c is sequential, after 6 and before train)
 
 **Core tasks (always run):**
 1. **ingest** — Move files from `data/<pipeline>/landing` to `data/<pipeline>/raw/<run_id>`, write `manifest.yaml`
@@ -84,6 +84,9 @@ not a new pipeline.
 - **profile** *(after validate_raw)* — ydata-profiling HTML reports per source; set `profile: false` to skip
 - **unsupervised_explore** *(parallel with validate_features)* — PCA + k-means segmentation; algorithm and `max_k` config-driven via `pipeline.yaml`; writes YAML report; does not feed into training; set `unsupervised_explore: false` to skip
 - **drift_report** *(after register)* — Evidently AI drift monitoring (current vs previous training set); set `drift_report: false` to skip
+
+**Always-present but usually a no-op:**
+- **create_benchmark** *(after validate_features, before train)* — unlike the tasks above, this isn't toggled via `tasks.enabled`; it's always in the DAG but does nothing on a normal scheduled run. Trigger the DAG with `conf={"refresh_benchmark": true}` to snapshot the current run's training features as the new fixed benchmark set, used by the regression check below.
 
 ### Data Flow
 
@@ -111,6 +114,27 @@ mlflow-artifacts/
 - **LightGBM** — Gradient boosting model
 - Both registered to MLflow `Staging` environment
 - **NO automatic promotion to Production** — manual UI click only
+
+### Champion/Challenger & Regression Detection
+
+Each run's best-performing model (lowest `test_rmse`) is tagged `run_champion` in MLflow and
+recorded in `reports/<pipeline>/<run_id>_evaluation.yaml` as a top-level `run_champion` key.
+
+If a pipeline has `benchmark.enabled: true` in `pipeline.yaml` and a benchmark set has been
+created (see `create_benchmark` above), every newly registered model is also compared against
+its own Production version (same model name) on that fixed benchmark set, using bootstrapped
+95% confidence intervals rather than a raw point comparison — the train/test split is redrawn
+every run, so comparing `test_rmse` across two different runs directly isn't statistically valid.
+A `regression_vs_production: true` flag (plus both models' RMSE confidence intervals) is written
+to the evaluation report and MLflow version tags when the candidate's CI is entirely worse than
+Production's. This is purely informational — **nothing here changes what gets registered to
+Staging or promoted to Production**; promotion remains a manual MLflow UI action. A
+`drift_detected` flag (current vs previous run's training features) is attached alongside it as
+interpretive context: a regression alongside detected drift suggests the data changed, while a
+regression without drift suggests the model itself regressed.
+
+See `docs/superpowers/specs/2026-07-03-champion-challenger-regression-check-design.md` for the
+full design rationale.
 
 ### Configuration
 

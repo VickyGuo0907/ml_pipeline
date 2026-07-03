@@ -2,6 +2,7 @@
 import pytest
 
 from src.utils.config import (
+    BenchmarkConfig,
     CleaningConfig,
     FeaturesConfig,
     ModelsConfig,
@@ -173,3 +174,41 @@ def test_pipeline_config_pipeline_type_default():
     }
     config = PipelineConfig(**data)
     assert config.pipeline_type == "generic"
+
+
+def test_benchmark_config_defaults():
+    """Test BenchmarkConfig defaults to disabled — opt-in per pipeline."""
+    cfg = BenchmarkConfig()
+    assert cfg.enabled is False
+
+
+def test_pipeline_config_benchmark_defaults_disabled():
+    """Test PipelineConfig.benchmark defaults to disabled when not specified in YAML."""
+    data = {
+        "sources": [{"name": "test", "path": "data/", "format": "csv"}],
+        "target": {"name": "y", "type": "continuous"},
+        "problem_type": "regression",
+    }
+    config = PipelineConfig(**data)
+    assert config.benchmark.enabled is False
+
+
+def test_biomedical_clinical_benchmark_enabled():
+    """Test the biomedical_clinical pipeline opts into the benchmark set."""
+    config = load_pipeline_config(BIOMEDICAL_CONFIG)
+    assert config.benchmark.enabled is True
+
+
+def test_bioinfo_gene_benchmark_disabled():
+    """Test bioinfo_gene stays lean and does not opt into the benchmark set."""
+    config = load_pipeline_config("config/bioinfo_gene")
+    assert config.benchmark.enabled is False
+
+
+def test_orchestration_directories_config_has_benchmark_field():
+    """Test OrchestrationDirectoriesConfig exposes a benchmark directory."""
+    config = load_pipeline_orchestration_config(
+        pipeline_dir=BIOMEDICAL_CONFIG,
+        base_dir="config/base",
+    )
+    assert config.directories.benchmark == "data/biomedical_clinical/benchmark"

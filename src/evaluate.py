@@ -7,6 +7,11 @@ report. Models that pass are registered to MLflow Staging.
 
 An evaluation YAML report is written to reports/<pipeline>/<run_id>_evaluation.yaml
 regardless of outcome, providing a full audit trail of every decision made.
+
+Also tags the best-performing model of each run as run_champion, and — when
+benchmark_dir/features_dir are provided — attaches a statistically-grounded
+regression_vs_production flag and drift_detected context. See
+docs/superpowers/specs/2026-07-03-champion-challenger-regression-check-design.md.
 """
 import logging
 import math
@@ -15,9 +20,14 @@ from pathlib import Path
 from typing import Any
 
 import mlflow
+import mlflow.pyfunc
+import pandas as pd
 import yaml
 
-from src.utils.config import EvaluationConfig, load_models_config
+from src.benchmark import bootstrap_rmse_ci, load_current_benchmark
+from src.monitoring import compute_drift_detected
+from src.utils.config import EvaluationConfig, load_models_config, load_pipeline_config
+from src.utils.io import find_previous_run_id
 
 logger = logging.getLogger(__name__)
 
@@ -64,18 +74,91 @@ def _check_thresholds(
     return None
 
 
+def _check_regression_vs_production(
+    client: mlflow.tracking.MlflowClient,
+    model_name: str,
+    candidate_model_uri: str,
+    benchmark_df: pd.DataFrame,
+    target_col: str,
+) -> dict[str, Any] | None:
+    """Compare a candidate model against the current Production version of the same name.
+
+    Scores both models on the same fixed benchmark set and compares bootstrapped
+    RMSE confidence intervals — a raw point comparison of test_rmse across runs
+    isn't valid here since the train/test split is redrawn every run (see the
+    design spec). Regression = the candidate's CI is entirely worse than (does
+    not overlap with) Production's CI.
+
+    Args:
+        client: MLflow tracking client.
+        model_name: Registered model name — compared against its own Production
+            version, never a different model type.
+        candidate_model_uri: MLflow URI for the newly trained candidate (runs:/<run_id>/model).
+        benchmark_df: Fixed benchmark feature matrix, including the target column.
+        target_col: Name of the target column within benchmark_df.
+
+    Returns:
+        Dict with regression_vs_production (bool), production_rmse_ci, and
+        candidate_rmse_ci — or None if the check could not be performed (no
+        Production version exists yet, or a model failed to load/predict).
+    """
+    try:
+        production_versions = client.get_latest_versions(model_name, stages=["Production"])
+    except Exception as e:
+        logger.warning("Could not look up Production version for %s: %s", model_name, e)
+        return None
+    if not production_versions:
+        return None
+
+    try:
+        X_benchmark = benchmark_df.drop(columns=[target_col])
+        y_benchmark = benchmark_df[target_col]
+
+        production_model = mlflow.pyfunc.load_model(f"models:/{model_name}/Production")
+        production_pred = production_model.predict(X_benchmark)
+        candidate_model = mlflow.pyfunc.load_model(candidate_model_uri)
+        candidate_pred = candidate_model.predict(X_benchmark)
+    except Exception as e:
+        logger.warning("Could not score %s against the benchmark set: %s", model_name, e)
+        return None
+
+    production_ci = bootstrap_rmse_ci(y_benchmark, production_pred)
+    candidate_ci = bootstrap_rmse_ci(y_benchmark, candidate_pred)
+
+    # Non-overlapping AND candidate is the worse one, in a single comparison:
+    # candidate's entire plausible-RMSE range sits above production's entire range.
+    is_regression = candidate_ci[0] > production_ci[1]
+
+    return {
+        "regression_vs_production": is_regression,
+        "production_rmse_ci": list(production_ci),
+        "candidate_rmse_ci": list(candidate_ci),
+    }
+
+
 def register_models_to_mlflow(
     mlflow_tracking_uri: str = "http://mlflow-server:5000",
     mlflow_run_ids: dict[str, str] | None = None,
     config_dir: str | Path = "config",
     run_id: str = "unknown",
     reports_dir: str | Path = "reports",
+    features_dir: str | Path | None = None,
+    benchmark_dir: str | Path | None = None,
 ) -> dict[str, Any]:
     """Evaluate trained models against quality thresholds and register passing ones.
 
     Threshold gate: models failing min_test_r2 or max_test_rmse from models.yaml
     are skipped (not registered) and recorded as 'rejected' in the evaluation
     report. All decisions are written to reports/<pipeline>/<run_id>_evaluation.yaml.
+
+    The best-performing registered model (lowest test_rmse) is tagged
+    run_champion. When benchmark_dir is provided and the pipeline's
+    pipeline.yaml has benchmark.enabled: true, each registered model is also
+    compared against its own Production version (if one exists) on a fixed
+    benchmark set via bootstrapped confidence intervals. When features_dir is
+    provided, a drift_detected flag (current vs previous run's training
+    features) is attached as interpretive context. Both are additive and
+    non-blocking — omitting either parameter reproduces prior behavior exactly.
 
     NO auto-promotion to Production — manual UI click only.
 
@@ -85,6 +168,11 @@ def register_models_to_mlflow(
         config_dir: Pipeline config directory (for evaluation thresholds).
         run_id: Airflow logical date, used for the report filename.
         reports_dir: Directory to write the evaluation YAML report.
+        features_dir: Pipeline features directory. When provided, enables
+            drift-context detection (current vs previous run). Optional.
+        benchmark_dir: Pipeline benchmark directory. When provided (and the
+            pipeline's benchmark.enabled is true), enables the statistical
+            regression check against Production. Optional.
 
     Returns:
         Dictionary with per-model evaluation decisions and registry info.
@@ -102,6 +190,26 @@ def register_models_to_mlflow(
 
     client = mlflow.tracking.MlflowClient(tracking_uri=mlflow_tracking_uri)
     timestamp = datetime.now(timezone.utc).isoformat()
+
+    benchmark_df: pd.DataFrame | None = None
+    target_col: str | None = None
+    if benchmark_dir is not None:
+        pipeline_cfg = load_pipeline_config(config_dir)
+        if pipeline_cfg.benchmark.enabled:
+            benchmark_df = load_current_benchmark(benchmark_dir)
+            target_col = pipeline_cfg.target.name
+
+    drift_detected: bool | None = None
+    if features_dir is not None:
+        try:
+            previous_run_id = find_previous_run_id(features_dir, run_id)
+            if previous_run_id is not None:
+                current_train = pd.read_parquet(Path(features_dir) / run_id / "train.parquet")
+                previous_train = pd.read_parquet(Path(features_dir) / previous_run_id / "train.parquet")
+                drift_detected = compute_drift_detected(previous_train, current_train)
+        except Exception as e:
+            logger.warning("Could not compute drift context: %s", e)
+            drift_detected = None
 
     report: dict[str, Any] = {
         "run_id": run_id,
@@ -172,6 +280,12 @@ def register_models_to_mlflow(
             registered_model = mlflow.register_model(model_uri=model_uri, name=model_name)
             version = registered_model.version
 
+            regression_info: dict[str, Any] | None = None
+            if benchmark_df is not None and target_col is not None:
+                regression_info = _check_regression_vs_production(
+                    client, model_name, model_uri, benchmark_df, target_col
+                )
+
             # Tags on the registered model (top-level, visible in Models list)
             registered_model_tags = {
                 "team": "data-eng",
@@ -200,6 +314,10 @@ def register_models_to_mlflow(
                 version_tags["test_r2"] = f"{test_r2:.4f}"
             if train_r2 is not None:
                 version_tags["train_r2"] = f"{train_r2:.4f}"
+            if regression_info is not None:
+                version_tags["regression_vs_production"] = str(regression_info["regression_vs_production"]).lower()
+            if drift_detected is not None:
+                version_tags["drift_detected"] = str(drift_detected).lower()
 
             _set_version_tags(client, model_name, version, version_tags)
 
@@ -251,6 +369,10 @@ def register_models_to_mlflow(
                 "test_rmse": test_rmse,
                 "train_rmse": train_rmse,
             }
+            if regression_info is not None:
+                report["models"][model_name].update(regression_info)
+            if drift_detected is not None:
+                report["models"][model_name]["drift_detected"] = drift_detected
             registration_results["registered_models"][model_name] = {
                 "status": "registered",
                 "version": version,
@@ -276,10 +398,21 @@ def register_models_to_mlflow(
             }
             infra_failures.append(model_name)
 
+    registered = [k for k, v in report["models"].items() if v["status"] == "registered"]
+    if registered:
+        champion_name = min(registered, key=lambda name: report["models"][name]["test_rmse"])
+        report["run_champion"] = champion_name
+        champion_version = report["models"][champion_name]["version"]
+        try:
+            _set_version_tags(client, champion_name, champion_version, {"run_champion": "true"})
+        except Exception as e:
+            logger.warning("Could not tag run champion %s v%s: %s", champion_name, champion_version, e)
+    else:
+        report["run_champion"] = None
+
     # Write evaluation report regardless of outcome
     _write_evaluation_report(report, run_id, reports_dir)
 
-    registered = [k for k, v in report["models"].items() if v["status"] == "registered"]
     rejected = [k for k, v in report["models"].items() if v["status"] == "rejected"]
     logger.info(
         "Evaluation complete: %d registered, %d rejected, %d errors",

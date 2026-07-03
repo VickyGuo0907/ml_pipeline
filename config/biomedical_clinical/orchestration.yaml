@@ -23,6 +23,7 @@ directories:
   raw: data/biomedical_clinical/raw
   interim: data/biomedical_clinical/interim
   features: data/biomedical_clinical/features
+  benchmark: data/biomedical_clinical/benchmark
   reports: reports/biomedical_clinical
   config: config/biomedical_clinical
   reports_base_url: "http://localhost:8888/biomedical_clinical"

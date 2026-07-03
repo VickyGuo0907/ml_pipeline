@@ -65,3 +65,6 @@ unsupervised:
   clustering:
     algorithm: "kmeans"
     max_k: 10
+
+benchmark:
+  enabled: true
