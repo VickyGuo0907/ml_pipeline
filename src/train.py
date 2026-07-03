@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any
 
 import mlflow
+import mlflow.lightgbm
 import mlflow.sklearn
 import pandas as pd
 import yaml
@@ -13,6 +14,30 @@ from src.utils.config import load_models_config, load_pipeline_config
 from src.utils.model_registry import get_model
 
 logger = logging.getLogger(__name__)
+
+# Maps config `type` strings (models.yaml) to the MLflow flavor used to log that model.
+# LightGBM's Booster/LGBMRegressor aren't on skops's default trusted-type list, so
+# mlflow.sklearn.log_model() silently fails to save gbm models (caught below, logged
+# as a warning, but no artifact is ever written — the model becomes unloadable even
+# though registration and training otherwise succeed). Types not listed here fall
+# back to mlflow.sklearn, which covers every other entry in model_registry.py.
+_MLFLOW_LOG_MODEL_FNS: dict[str, Any] = {
+    "gbm": mlflow.lightgbm.log_model,
+}
+
+
+def _log_model(model: Any, model_type: str) -> Any:
+    """Log a trained model to MLflow using the flavor appropriate to its type.
+
+    Args:
+        model: Fitted estimator.
+        model_type: Registry type string from models.yaml (e.g. "gbm", "ridge").
+
+    Returns:
+        The MLflow ModelInfo for the logged model.
+    """
+    log_fn = _MLFLOW_LOG_MODEL_FNS.get(model_type, mlflow.sklearn.log_model)
+    return log_fn(model, artifact_path="model")
 
 
 def _log_metrics(
@@ -125,7 +150,7 @@ def train_models(
 
             model_id: str | None = None
             try:
-                model_info = mlflow.sklearn.log_model(model, artifact_path="model")
+                model_info = _log_model(model, model_cfg.type)
                 model_id = model_info.model_id
             except Exception as e:
                 logger.warning("Could not log %s to MLflow: %s", model_cfg.name, e)
