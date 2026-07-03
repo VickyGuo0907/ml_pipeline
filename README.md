@@ -1,6 +1,23 @@
 # ML Pipeline POC
 
-End-to-end machine learning pipeline demonstrating orchestration, validation, training, and serving at scale.
+A common, flexible ML pipeline template for tabular regression problems — ingestion, validation,
+feature engineering, training, evaluation, and serving, all driven by YAML config rather than
+code changes. The goal is a reusable pipeline, not a one-off script: add a new dataset by
+dropping a `config/<pipeline>/` directory, and `dag_factory.py` auto-discovers it and registers
+a new Airflow DAG with no Python changes required.
+
+Two demo pipelines exercise this in the repo today:
+
+- **`biomedical_clinical`** — CMS Hospital Compare hospital readmission data (the primary
+  walkthrough in this README, since it has the richest config: multi-source pivot-joins, Box-Cox,
+  VIF pruning, six model types)
+- **`bioinfo_gene`** — a second, differently-shaped dataset (gene expression), proving the same
+  codebase adapts to a new domain through config alone, with its own optional-task toggles
+  (profiling on, clustering and drift off)
+
+CMS Hospital Compare is one demo dataset used to present the pipeline, not the point of the
+project — the point is that swapping it for a different dataset takes a new config directory,
+not a new pipeline.
 
 ## Quick Start
 
@@ -174,14 +191,30 @@ The DIAGNOSTICS.md guide covers:
 - **Storage:** Local Parquet, bind-mounted Docker volumes
 - **Database:** PostgreSQL 16 (separate instances for Airflow & MLflow)
 
-## Dataset
+## Demo Pipelines
 
-CMS Hospital Compare data (multi-source CSV):
+Each pipeline is just a `config/<name>/` directory — the code in `src/` is shared and unaware
+of which dataset it's processing.
+
+### `biomedical_clinical` — CMS Hospital Compare (primary demo)
+
+Multi-source CSV data, chosen because it needs the full range of the template's features:
 - **Rows:** ~4,800+ hospitals
 - **Columns:** Quality measures, HCAHPS scores, safety grades
 - **Target:** `ExcessReadmissionRatio` (pneumonia readmissions, continuous)
+- **Exercises:** pivot-join assembly across files, Box-Cox target transform, VIF pruning, all 6 model types, all 3 optional tasks
 
 Place CSV or Parquet files in `data/biomedical_clinical/landing/` before running the DAG.
+
+### `bioinfo_gene` — gene expression (second demo)
+
+A deliberately different domain, added to prove the config-driven claim rather than to be
+fully tuned:
+- **Target:** `expression_level` (continuous)
+- **Exercises:** a leaner config (2 models, no join strategy), profiling on but clustering/drift
+  off via `tasks.enabled` — showing the same DAG factory adapts without touching Python
+
+Place CSV files in `data/bioinfo_gene/landing/` before running its DAG.
 
 ## Key Design Decisions
 
@@ -226,7 +259,9 @@ uv run pytest tests/ -v  # Full verbose output
 
 ## Next Steps
 
-1. Place sample Hospital Compare CSVs in `data/biomedical_clinical/landing/`
+1. Place sample Hospital Compare CSVs in `data/biomedical_clinical/landing/` (or your own data in
+   a new `config/<pipeline>/landing/` — see [Demo Pipelines](#demo-pipelines) for what a second
+   pipeline needs)
 2. Follow the [TESTING.md](TESTING.md) guide to:
    - Trigger `biomedical_clinical_pipeline` DAG in Airflow
    - Validate outputs at each stage (raw → interim → features → models)
