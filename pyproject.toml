@@ -31,11 +31,9 @@ dependencies = [
     # Configuration and secrets
     "pydantic>=2.5.0,<3.0",
     "pyyaml>=6.0,<7.0",
-    "python-dotenv>=1.0.0,<2.0",
     # FastAPI serving
     "fastapi>=0.111.0,<0.120",
     "uvicorn[standard]>=0.24.0",
-    "pydantic-settings>=2.0.0,<3.0",
     # Airflow orchestration
     "apache-airflow>=2.10.0,<2.11",
     "apache-airflow-providers-postgres>=5.10.0,<6.0",
@@ -46,8 +44,6 @@ dependencies = [
     "scipy>=1.11.0,<2.0",
     "statsmodels>=0.14.0,<1.0",
     # Utilities
-    "requests>=2.31.0,<3.0",
-    "python-dateutil>=2.8.0,<3.0",
     "setuptools>=70.0,<72",
     "pandas-stubs~=2.1.4",
 ]
@@ -59,7 +55,6 @@ dev = [
     "black>=23.11.0,<24.0",
     "ruff>=0.1.0,<0.2",
     "mypy>=1.7.0,<2.0",
-    "types-requests>=2.31.0,<2.32",
     "types-pyyaml>=6.0,<7.0",
 ]
 
