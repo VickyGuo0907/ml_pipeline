@@ -358,6 +358,41 @@ class TestRegressionVsProduction:
         report = yaml.safe_load((tmp_path / "reports" / "2026-07-03_evaluation.yaml").read_text())
         assert "regression_vs_production" not in report["models"]["ridge_baseline"]
 
+    @patch("src.evaluate.mlflow")
+    def test_missing_target_column_in_benchmark_does_not_block_registration(
+        self, mock_mlflow, config_dir_with_pipeline, tmp_path
+    ):
+        """A stale benchmark snapshot missing the (renamed) target column must not
+        prevent an already-passing model from registering — the regression check
+        should degrade to None instead of raising KeyError out of the per-model loop.
+        """
+        mock_mlflow.get_run.return_value = _mock_run(
+            {"test_rmse": 0.2, "test_r2": 0.8, "train_rmse": 0.1, "train_r2": 0.85}
+        )
+        mock_mlflow.register_model.return_value = MagicMock(version="2")
+        client = MagicMock()
+        client.get_latest_versions.return_value = [MagicMock(version="1")]
+        mock_mlflow.tracking.MlflowClient.return_value = client
+
+        benchmark_dir = _make_benchmark_dir(tmp_path)
+        # Overwrite the snapshot so it no longer contains the "target" column
+        # pipeline.yaml expects — simulating a stale, manually-refreshed benchmark.
+        snapshot_path = next(Path(benchmark_dir).rglob("*.parquet"))
+        pd.DataFrame({"f1": list(range(50))}).to_parquet(snapshot_path)
+
+        result = register_models_to_mlflow(
+            mlflow_run_ids={"ridge_baseline": "run123"},
+            config_dir=config_dir_with_pipeline,
+            run_id="2026-07-03",
+            reports_dir=tmp_path / "reports",
+            benchmark_dir=benchmark_dir,
+        )
+
+        assert result["registered_models"]["ridge_baseline"]["status"] == "registered"
+        report = yaml.safe_load((tmp_path / "reports" / "2026-07-03_evaluation.yaml").read_text())
+        assert report["models"]["ridge_baseline"]["status"] == "registered"
+        assert "regression_vs_production" not in report["models"]["ridge_baseline"]
+
 
 class TestDriftContext:
     """Tests for attaching drift_detected context to the evaluation report."""
@@ -429,4 +464,38 @@ class TestDriftContext:
         )
 
         report = yaml.safe_load((tmp_path / "reports" / "2026-07-03_evaluation.yaml").read_text())
+        assert "drift_detected" not in report["models"]["ridge_baseline"]
+
+    @patch("src.evaluate.mlflow")
+    def test_missing_previous_train_parquet_does_not_block_registration(self, mock_mlflow, config_dir, tmp_path):
+        """A previous run directory can exist (e.g. a partially-failed earlier run,
+        or manual cleanup) without train.parquet inside it. Drift context must
+        degrade to None instead of letting FileNotFoundError kill the whole
+        registration run before any model is registered.
+        """
+        mock_mlflow.get_run.return_value = _mock_run(
+            {"test_rmse": 0.2, "test_r2": 0.8, "train_rmse": 0.1, "train_r2": 0.85}
+        )
+        mock_mlflow.register_model.return_value = MagicMock(version="1")
+        mock_mlflow.tracking.MlflowClient.return_value = MagicMock()
+
+        features_dir = tmp_path / "features"
+        previous_run_dir = features_dir / "2026-07-02"
+        previous_run_dir.mkdir(parents=True)  # directory exists, but train.parquet does not
+
+        current_run_dir = features_dir / "2026-07-03"
+        current_run_dir.mkdir(parents=True)
+        pd.DataFrame({"a": [1.0], "target": [0.1]}).to_parquet(current_run_dir / "train.parquet")
+
+        result = register_models_to_mlflow(
+            mlflow_run_ids={"ridge_baseline": "run123"},
+            config_dir=config_dir,
+            run_id="2026-07-03",
+            reports_dir=tmp_path / "reports",
+            features_dir=features_dir,
+        )
+
+        assert result["registered_models"]["ridge_baseline"]["status"] == "registered"
+        report = yaml.safe_load((tmp_path / "reports" / "2026-07-03_evaluation.yaml").read_text())
+        assert report["models"]["ridge_baseline"]["status"] == "registered"
         assert "drift_detected" not in report["models"]["ridge_baseline"]

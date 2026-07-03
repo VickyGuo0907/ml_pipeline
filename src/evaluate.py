@@ -110,10 +110,10 @@ def _check_regression_vs_production(
     if not production_versions:
         return None
 
-    X_benchmark = benchmark_df.drop(columns=[target_col])
-    y_benchmark = benchmark_df[target_col]
-
     try:
+        X_benchmark = benchmark_df.drop(columns=[target_col])
+        y_benchmark = benchmark_df[target_col]
+
         production_model = mlflow.pyfunc.load_model(f"models:/{model_name}/Production")
         production_pred = production_model.predict(X_benchmark)
         candidate_model = mlflow.pyfunc.load_model(candidate_model_uri)
@@ -201,11 +201,15 @@ def register_models_to_mlflow(
 
     drift_detected: bool | None = None
     if features_dir is not None:
-        previous_run_id = find_previous_run_id(features_dir, run_id)
-        if previous_run_id is not None:
-            current_train = pd.read_parquet(Path(features_dir) / run_id / "train.parquet")
-            previous_train = pd.read_parquet(Path(features_dir) / previous_run_id / "train.parquet")
-            drift_detected = compute_drift_detected(previous_train, current_train)
+        try:
+            previous_run_id = find_previous_run_id(features_dir, run_id)
+            if previous_run_id is not None:
+                current_train = pd.read_parquet(Path(features_dir) / run_id / "train.parquet")
+                previous_train = pd.read_parquet(Path(features_dir) / previous_run_id / "train.parquet")
+                drift_detected = compute_drift_detected(previous_train, current_train)
+        except Exception as e:
+            logger.warning("Could not compute drift context: %s", e)
+            drift_detected = None
 
     report: dict[str, Any] = {
         "run_id": run_id,
