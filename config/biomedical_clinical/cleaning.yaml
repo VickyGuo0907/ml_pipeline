@@ -20,24 +20,5 @@ drop_column_patterns:
 protect_columns:
   - "HCAHPS Linear Mean Value"
 
-# Columns to check for exact duplicates (null = check all)
+# Columns to check for exact duplicates (null = check all columns)
 duplicates_subset: null
-
-steps:
-  - name: "type_coercion"
-    type: "coerce_types"
-    columns: null
-    params:
-      force_numeric: false
-
-  - name: "impute_missing"
-    type: "impute"
-    columns: null
-    params:
-      threshold: 0.5  # Drop columns with >50% missing before imputing
-
-  - name: "remove_duplicates"
-    type: "deduplicate"
-    columns: null
-    params:
-      keep: "first"

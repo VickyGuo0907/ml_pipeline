@@ -57,8 +57,6 @@ def test_load_cleaning_config():
     assert config.impute_strategy == "median"
     assert len(config.drop_column_patterns) > 0
     assert "Footnote" in config.drop_column_patterns
-    assert len(config.steps) >= 1
-    assert config.steps[0].name == "type_coercion"
 
 
 def test_load_features_config():
@@ -160,10 +158,10 @@ def test_features_config_nzv_threshold_validation():
 
 def test_cleaning_config_defaults():
     """Test CleaningConfig defaults are backward-compatible."""
-    config = CleaningConfig(steps=[])
+    config = CleaningConfig()
     assert config.impute_strategy == "median"
     assert config.drop_column_patterns == []
-    assert config.missing_strategy == "drop"
+    assert config.duplicates_subset is None
 
 
 def test_pipeline_config_pipeline_type_default():

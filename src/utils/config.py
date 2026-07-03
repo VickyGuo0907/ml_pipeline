@@ -133,20 +133,9 @@ class PipelineConfig(BaseModel):
         return v
 
 
-class CleaningStep(BaseModel):
-    """Single cleaning transformation step."""
-
-    name: str = Field(..., description="Step identifier")
-    type: str = Field(..., description="Cleaning operation type")
-    columns: Optional[list[str]] = Field(default=None, description="Columns to apply to")
-    params: dict[str, Any] = Field(default_factory=dict, description="Step parameters")
-
-
 class CleaningConfig(BaseModel):
     """Data cleaning configuration."""
 
-    steps: list[CleaningStep] = Field(..., description="Cleaning steps in order")
-    missing_strategy: str = Field(default="drop", description="Legacy: strategy for missing values")
     # Options: median | iterative (MICE/missForest-like) | knn
     impute_strategy: str = Field(default="median", description="Imputation strategy")
     # Column name substrings to drop after imputation (case-insensitive)
@@ -160,16 +149,6 @@ class CleaningConfig(BaseModel):
         default_factory=list,
         description="Columns excluded from the high-missing-value drop (useful for sparse pivot-join columns)",
     )
-
-
-class FeatureEngineeringStep(BaseModel):
-    """Feature engineering transformation step."""
-
-    name: str = Field(..., description="Feature name/identifier")
-    type: str = Field(..., description="Feature type: categorical, numerical, etc")
-    source_columns: list[str] = Field(..., description="Input columns")
-    operation: str = Field(..., description="Operation to perform")
-    params: dict[str, Any] = Field(default_factory=dict, description="Operation parameters")
 
 
 class JoinSpineConfig(BaseModel):
@@ -204,9 +183,6 @@ class FeaturesConfig(BaseModel):
 
     encoding: dict[str, str] = Field(
         default_factory=dict, description="Column encoding mapping"
-    )
-    steps: list[FeatureEngineeringStep] = Field(
-        default_factory=list, description="Feature engineering steps"
     )
     nzv_threshold: float = Field(
         default=0.95, ge=0.0, le=1.0, description="Near-zero variance threshold"

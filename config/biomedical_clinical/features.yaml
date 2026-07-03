@@ -20,8 +20,6 @@ join_strategy:
 encoding:
   "State": "frequency"
 
-steps: []
-
 # SVG Stage 2: Box-Cox transform on ExcessReadmissionRatio target
 boxcox_target: true
 

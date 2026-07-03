@@ -81,7 +81,7 @@ def _clean_single_file(
     impute_fn = IMPUTE_REGISTRY.get(cleaning_config.impute_strategy, IMPUTE_REGISTRY["median"])
     df = impute_fn(df)
 
-    df = df.drop_duplicates()
+    df = df.drop_duplicates(subset=cleaning_config.duplicates_subset)
 
     return df, {
         "initial_shape": initial_shape,
