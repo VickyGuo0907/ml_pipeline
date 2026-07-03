@@ -134,7 +134,9 @@ interpretive context: a regression alongside detected drift suggests the data ch
 regression without drift suggests the model itself regressed.
 
 See `docs/superpowers/specs/2026-07-03-champion-challenger-regression-check-design.md` for the
-full design rationale.
+full design rationale, or open
+`docs/superpowers/specs/diagrams/champion-challenger-regression-check.html` in a browser for a
+visual walkthrough of the data flow above.
 
 ### Configuration
 

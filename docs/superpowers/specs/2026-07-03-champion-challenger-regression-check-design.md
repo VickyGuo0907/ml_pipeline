@@ -1,7 +1,8 @@
 # Champion/Challenger Regression Check — Design Spec
 
 **Date:** 2026-07-03
-**Status:** Approved for planning (see conversation history for the brainstorm that produced this)
+**Status:** Implemented and merged to `main` (see conversation history for the brainstorm that produced this)
+**Diagram:** [diagrams/champion-challenger-regression-check.html](diagrams/champion-challenger-regression-check.html) — open in a browser for the visual data-flow view of this spec
 
 ## Context
 
