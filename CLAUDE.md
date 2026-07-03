@@ -9,7 +9,7 @@ Build an end-to-end ML pipeline POC on local docker-compose, designed to demonst
 - **EDA / profiling:** ydata-profiling
 - **Data manipulation:** pandas
 - **Storage:** Local Parquet, bind-mounted Docker volumes (no MinIO, no S3)
-- **Versioning:** DVC for data, git for code
+- **Versioning:** run_id-dated directories + manifest.yaml checksums at every storage boundary, git for code (DVC was considered but dropped — dvc-s3 contradicted the no-S3 storage rule, and manifest.yaml already covers the stated goal)
 - **Experiment tracking + model registry:** MLflow with Postgres backend, local filesystem artifact store
 - **Modeling:** scikit-learn + LightGBM (regularized linear baseline + gradient boosting)
 - **Serving:** FastAPI
@@ -50,7 +50,6 @@ ml-pipeline/
 ├── uv.lock
 ├── src/
 │   ├── dags/dag_factory.py
-│   ├── scripts/diagnose_pipeline.py, analyze_models.py
 │   ├── ingest.py, validate.py, profile.py, clean.py
 │   ├── features.py, train.py, evaluate.py
 │   ├── serve.py, monitoring.py

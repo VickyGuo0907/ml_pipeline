@@ -133,17 +133,8 @@ The TESTING.md guide covers:
 
 **For step-by-step pipeline debugging guide, see [DIAGNOSTICS.md](DIAGNOSTICS.md).**
 
-Quick diagnostic check:
-```bash
-# Run comprehensive diagnostics
-python3 src/scripts/diagnose_pipeline.py
-
-# Analyze model performance
-python3 src/scripts/analyze_models.py
-
-# Or in Docker environment
-docker compose exec airflow-scheduler python3 /path/to/script.py
-```
+Quick diagnostic check: read Parquet outputs and query MLflow directly (see DIAGNOSTICS.md
+for copy-pasteable snippets), or use the MLflow UI's Runs tab to compare metrics across runs.
 
 The DIAGNOSTICS.md guide covers:
 - Understanding baseline vs model performance

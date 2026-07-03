@@ -20,16 +20,9 @@ Improvement = (Baseline - Model) / Baseline × 100%
 
 ### Run Diagnostics
 
-```bash
-# Full diagnostics report
-python3 src/scripts/diagnose_pipeline.py
-
-# Model performance analysis
-python3 src/scripts/analyze_models.py
-
-# Or in Docker environment
-docker compose exec airflow-scheduler python3 /path/to/script.py
-```
+Use the snippets in each stage section below directly in a Python shell (or
+`docker compose exec airflow-scheduler python3`), or check the MLflow UI's
+Runs tab for metrics and model comparisons.
 
 ## Pipeline Stages & Debugging
 
