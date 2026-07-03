@@ -36,6 +36,9 @@ Build an end-to-end ML pipeline POC on local docker-compose, designed to demonst
 6. validate_features — pandera schema check on feature matrix
 7. train — sklearn + lightgbm, MLflow autolog, both models per run
 8. evaluate_and_register — compute metrics, register to MLflow Staging
+- (optional, manual-trigger only) benchmark — snapshots the current run's training features as
+  a fixed evaluation set for champion/challenger regression checks; a no-op unless the DAG is
+  triggered with conf={"refresh_benchmark": true}
 9. drift_report — Evidently HTML, compares current features to previous training set
 
 Serving (FastAPI) runs as always-on container, NOT a DAG stage. Loads model tagged Production from MLflow registry.
@@ -51,7 +54,7 @@ ml-pipeline/
 ├── src/
 │   ├── dags/dag_factory.py
 │   ├── ingest.py, validate.py, profile.py, clean.py
-│   ├── features.py, train.py, evaluate.py
+│   ├── features.py, train.py, evaluate.py, benchmark.py
 │   ├── serve.py, monitoring.py
 │   ├── schemas/{raw.py, features.py}
 │   └── utils/{config.py, io.py}
