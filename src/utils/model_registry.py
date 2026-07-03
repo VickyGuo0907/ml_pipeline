@@ -38,13 +38,3 @@ def get_model(model_type: str, hyperparameters: dict[str, Any]) -> Any:
             f"Add it to src/utils/model_registry.py to enable."
         )
     return MODEL_REGISTRY[model_type](**hyperparameters)
-
-
-def register_model(type_key: str, model_class: type) -> None:
-    """Register a custom estimator class under a new type key.
-
-    Args:
-        type_key: String key to use in models.yaml `type` field.
-        model_class: Estimator class (must follow sklearn fit/predict API).
-    """
-    MODEL_REGISTRY[type_key] = model_class

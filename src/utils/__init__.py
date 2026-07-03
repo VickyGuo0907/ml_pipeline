@@ -12,7 +12,7 @@ from src.utils.config import (
     load_orchestration_config,
     load_pipeline_config,
 )
-from src.utils.model_registry import MODEL_REGISTRY, get_model, register_model
+from src.utils.model_registry import MODEL_REGISTRY, get_model
 from src.utils.transforms import (
     IMPUTE_REGISTRY,
     boxcox_transform,
@@ -40,7 +40,6 @@ __all__ = [
     # Model registry
     "MODEL_REGISTRY",
     "get_model",
-    "register_model",
     # Transforms
     "IMPUTE_REGISTRY",
     "frequency_encode",
