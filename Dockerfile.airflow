@@ -11,21 +11,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 USER airflow
 
-# Install core ML pipeline dependencies
-RUN pip install --no-cache-dir \
-    mlflow \
-    pandas \
-    numpy \
-    scikit-learn \
-    lightgbm \
-    pandera[io] \
-    evidently \
-    pydantic \
-    pydantic-settings \
-    pyyaml \
-    python-dotenv \
-    requests \
-    dvc[s3]
-
-# ydata-profiling has complex dependencies; install with retries
-RUN pip install --no-cache-dir ydata-profiling || true
+# Install the project's actual pinned dependencies (pyproject.toml/uv.lock) instead of a
+# hand-maintained, unpinned list — that list had silently drifted to evidently==0.7.21
+# (pyproject.toml pins <0.5), breaking drift detection's Report/DatasetDriftMetric imports
+# with no error, only a swallowed ImportError. apache-airflow and its postgres provider are
+# pruned since the base image already provides them at the versions Airflow itself requires;
+# installing them again here risks fighting Airflow's own constrained dependency set.
+COPY --chown=airflow:root pyproject.toml uv.lock ./
+RUN pip install --no-cache-dir --upgrade "uv>=0.4" \
+    && uv export --no-dev --no-emit-project --prune apache-airflow --prune apache-airflow-providers-postgres --no-header --no-hashes > /tmp/requirements.txt \
+    && pip install --no-cache-dir -r /tmp/requirements.txt \
+    && rm /tmp/requirements.txt
