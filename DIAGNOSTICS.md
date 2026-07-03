@@ -208,6 +208,45 @@ for m in models:
 - Models not registering → Check MLflow connectivity
 - 404 errors → Models not logged as artifacts in training
 
+### Stage 6c: Benchmark Snapshot (`06c_create_benchmark`) — Champion/Challenger Regression Check
+
+**What to check:**
+```bash
+# The evaluation report has full audit detail — this is the first place to look
+cat reports/biomedical_clinical/{run_id}_evaluation.yaml
+# Look for: run_champion (best model this run), regression_vs_production,
+# production_rmse_ci / candidate_rmse_ci, drift_detected (per model)
+```
+
+```bash
+# Confirm whether a benchmark set actually exists yet — the regression check
+# silently no-ops until one is created
+ls -lh data/biomedical_clinical/benchmark/
+cat data/biomedical_clinical/benchmark/current.yaml
+```
+
+**Refreshing the benchmark set** (this task is always in the DAG but does nothing on a normal
+scheduled run):
+```bash
+docker exec airflow-scheduler airflow dags trigger biomedical_clinical_pipeline \
+  --conf '{"refresh_benchmark": true}'
+```
+
+**Common issues:**
+- `regression_vs_production` missing from a model's report entry → either no benchmark exists yet
+  (`current.yaml` absent — trigger a refresh above), `pipeline.yaml`'s `benchmark.enabled` is
+  `false`, or there's no Production version yet for that model name to compare against. All three
+  are expected no-ops, not errors.
+- Regression flagged (`regression_vs_production: true`) but you're not sure if it's real → check
+  the same model's `drift_detected` field. Flagged + drift detected usually means the data shifted;
+  flagged + no drift usually means the model itself got worse.
+- A flagged regression never blocks Staging registration — this whole feature is informational
+  only. If you expected a model to stop registering, check `evaluation.min_test_r2`/`max_test_rmse`
+  in `models.yaml` instead (the actual gate).
+
+See `docs/superpowers/specs/2026-07-03-champion-challenger-regression-check-design.md` for the
+full design rationale.
+
 ### Stage 9: Drift Detection (`09_drift_report`)
 
 **What to check:**

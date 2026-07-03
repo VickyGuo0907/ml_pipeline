@@ -176,6 +176,23 @@ mlflow runs describe --run-id <run_id>
 mlflow artifacts download --run-id <run_id> --dst-path ./artifacts
 ```
 
+### Champion Tag and Regression Check
+
+After training, `08_register_to_mlflow` tags the best-performing model of the run (`run_champion`)
+and — if a fixed benchmark set exists for this pipeline — compares each candidate against its own
+Production version via bootstrapped confidence intervals, before any registration happens:
+
+```bash
+cat reports/biomedical_clinical/{run_id}_evaluation.yaml
+# run_champion: <best model this run>
+# models.<name>.regression_vs_production / production_rmse_ci / candidate_rmse_ci / drift_detected
+```
+
+This is informational only — it never blocks a model from registering to Staging or changes what
+you promote in Phase 5 below. If `regression_vs_production` is missing from a model's entry, no
+benchmark exists yet for this pipeline; create one by triggering the DAG with
+`conf={"refresh_benchmark": true}` (see `DIAGNOSTICS.md` for details).
+
 ---
 
 ## Phase 5: Register and Promote Models to Production
