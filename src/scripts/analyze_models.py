@@ -4,9 +4,7 @@ import sys
 from pathlib import Path
 
 import mlflow
-import numpy as np
 import pandas as pd
-from sklearn.metrics import mean_absolute_error, mean_absolute_percentage_error, r2_score
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -19,7 +17,7 @@ def analyze_model_metrics(run_id: str = None) -> None:
     client = mlflow.tracking.MlflowClient()
 
     print(f"\n{'='*70}")
-    print(f"MODEL PERFORMANCE ANALYSIS")
+    print("MODEL PERFORMANCE ANALYSIS")
     print(f"{'='*70}")
 
     # Get all runs sorted by timestamp
@@ -42,7 +40,7 @@ def analyze_model_metrics(run_id: str = None) -> None:
         print("❌ No model training runs found")
         return
 
-    print(f"\n📈 Latest Model Metrics:")
+    print("\n📈 Latest Model Metrics:")
     print(f"{'Model':<25} {'Train RMSE':<12} {'Test RMSE':<12} {'Improvement':<12}")
     print("-" * 65)
 
@@ -61,9 +59,9 @@ def analyze_model_metrics(run_id: str = None) -> None:
             print(f"{model_name:<25} {metrics['train_rmse']:<12.4f} {metrics['test_rmse']:<12.4f} {improvement:<12.1f}%")
 
         print(f"\nℹ️  Baseline (predict mean): {baseline_rmse:.4f}")
-        print(f"    Models should beat this RMSE!")
+        print("    Models should beat this RMSE!")
 
-    print(f"\n🎯 Key Insights:")
+    print("\n🎯 Key Insights:")
     for model_name, metrics in models_data.items():
         train_rmse = metrics["train_rmse"]
         test_rmse = metrics["test_rmse"]
@@ -73,7 +71,7 @@ def analyze_model_metrics(run_id: str = None) -> None:
         if overfitting > 10:
             print(f"    ⚠️  Potential overfitting ({overfitting:.1f}% train→test increase)")
         elif overfitting < 0:
-            print(f"    ✓ Test better than train (possible - different distributions)")
+            print("    ✓ Test better than train (possible - different distributions)")
         else:
             print(f"    ✓ Reasonable generalization ({overfitting:.1f}% gap)")
 
@@ -81,7 +79,7 @@ def analyze_model_metrics(run_id: str = None) -> None:
 def analyze_feature_importance(run_id: str = None) -> None:
     """Analyze feature importance if available."""
     print(f"\n{'='*70}")
-    print(f"FEATURE IMPORTANCE HINTS")
+    print("FEATURE IMPORTANCE HINTS")
     print(f"{'='*70}")
 
     features_dir = Path("data/features")
@@ -98,12 +96,12 @@ def analyze_feature_importance(run_id: str = None) -> None:
     X_train = train_df.drop(columns=[target])
     y_train = train_df[target]
 
-    print(f"\n📊 Top 10 Features by Variance (may indicate importance):")
+    print("\n📊 Top 10 Features by Variance (may indicate importance):")
     variances = X_train.var().sort_values(ascending=False)
     for i, (feat, var) in enumerate(variances.head(10).items(), 1):
         print(f"  {i:2d}. {feat:35s} (variance: {var:.6f})")
 
-    print(f"\n📈 Feature Correlations with Target:")
+    print("\n📈 Feature Correlations with Target:")
     correlations = X_train.corrwith(y_train).abs().sort_values(ascending=False)
     for i, (feat, corr) in enumerate(correlations.head(10).items(), 1):
         direction = "↑" if X_train[feat].corr(y_train) > 0 else "↓"
@@ -113,7 +111,7 @@ def analyze_feature_importance(run_id: str = None) -> None:
 def suggest_improvements() -> None:
     """Suggest areas for improvement."""
     print(f"\n{'='*70}")
-    print(f"SUGGESTED IMPROVEMENTS")
+    print("SUGGESTED IMPROVEMENTS")
     print(f"{'='*70}")
 
     improvements = [

@@ -52,7 +52,7 @@ ml-pipeline/
 │   ├── dags/dag_factory.py
 │   ├── scripts/diagnose_pipeline.py, analyze_models.py
 │   ├── ingest.py, validate.py, profile.py, clean.py
-│   ├── features.py, train.py, evaluate.py, register.py
+│   ├── features.py, train.py, evaluate.py
 │   ├── serve.py, monitoring.py
 │   ├── schemas/{raw.py, features.py}
 │   └── utils/{config.py, io.py}

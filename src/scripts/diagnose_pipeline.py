@@ -4,7 +4,6 @@ import sys
 from pathlib import Path
 
 import pandas as pd
-from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -39,7 +38,7 @@ def analyze_features(run_id: str = None) -> None:
     print(f"FEATURE ANALYSIS: {run_id}")
     print(f"{'='*60}")
 
-    print(f"\n📊 Data Shapes:")
+    print("\n📊 Data Shapes:")
     print(f"  Train: {train_df.shape} | Test: {test_df.shape}")
 
     print(f"\n🎯 Target Variable: {target}")
@@ -47,24 +46,24 @@ def analyze_features(run_id: str = None) -> None:
     print(f"  Test  - Mean: {test_df[target].mean():8.4f}, Std: {test_df[target].std():6.4f}")
     print(f"  Range: [{train_df[target].min():.4f}, {train_df[target].max():.4f}]")
 
-    print(f"\n🔢 Feature Statistics:")
+    print("\n🔢 Feature Statistics:")
     X_train = train_df.drop(columns=[target])
     print(f"  Features: {X_train.shape[1]}")
     print(f"  Numeric: {X_train.select_dtypes('number').shape[1]}")
     print(f"  Categorical: {X_train.select_dtypes('object').shape[1]}")
 
-    print(f"\n❌ Missing Values:")
+    print("\n❌ Missing Values:")
     print(f"  Train: {train_df.isnull().sum().sum()}")
     print(f"  Test: {test_df.isnull().sum().sum()}")
 
-    print(f"\n📈 Feature Variance:")
+    print("\n📈 Feature Variance:")
     for col in X_train.select_dtypes('number').columns[:5]:
         print(f"  {col:30s} - Mean: {X_train[col].mean():8.4f}, Std: {X_train[col].std():6.4f}")
 
-    print(f"\n📊 Baseline Metrics (predicting mean):")
+    print("\n📊 Baseline Metrics (predicting mean):")
     baseline_rmse = ((test_df[target] - test_df[target].mean()) ** 2).mean() ** 0.5
     print(f"  Baseline RMSE: {baseline_rmse:.4f}")
-    print(f"  (Model should beat this!)")
+    print("  (Model should beat this!)")
 
 
 def analyze_training_results(run_id: str = None) -> None:
@@ -74,7 +73,7 @@ def analyze_training_results(run_id: str = None) -> None:
     mlflow.set_tracking_uri("http://mlflow-server:5000")
 
     print(f"\n{'='*60}")
-    print(f"TRAINING RESULTS ANALYSIS")
+    print("TRAINING RESULTS ANALYSIS")
     print(f"{'='*60}")
 
     client = mlflow.tracking.MlflowClient()
@@ -90,13 +89,13 @@ def analyze_training_results(run_id: str = None) -> None:
 
         metrics = run.data.metrics
         if metrics:
-            print(f"   Metrics:")
+            print("   Metrics:")
             for key, value in sorted(metrics.items()):
                 print(f"     {key:20s}: {value:.4f}")
 
         params = run.data.params
         if params:
-            print(f"   Parameters:")
+            print("   Parameters:")
             for key, value in sorted(params.items())[:5]:
                 print(f"     {key:20s}: {value}")
 
@@ -104,7 +103,7 @@ def analyze_training_results(run_id: str = None) -> None:
 def analyze_data_quality(run_id: str = None) -> None:
     """Check data quality at different pipeline stages."""
     print(f"\n{'='*60}")
-    print(f"DATA QUALITY CHECKS")
+    print("DATA QUALITY CHECKS")
     print(f"{'='*60}")
 
     # Check raw data

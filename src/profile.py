@@ -3,7 +3,6 @@ import logging
 from pathlib import Path
 from typing import Any
 
-import pandas as pd
 import ydata_profiling.model.pandas.describe_categorical_pandas as _ydp_cat
 from ydata_profiling import ProfileReport
 

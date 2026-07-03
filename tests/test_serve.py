@@ -1,7 +1,7 @@
 """Tests for FastAPI serving endpoint."""
 import pytest
 from fastapi.testclient import TestClient
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock
 
 from src.serve import app, PredictionInput, _model_cache
 
