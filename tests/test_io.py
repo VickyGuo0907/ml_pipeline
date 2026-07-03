@@ -28,5 +28,8 @@ class TestFindPreviousRunId:
         assert find_previous_run_id(tmp_path, "2026-07-01") == "2026-06-01"
 
     def test_current_run_itself_is_not_returned(self, tmp_path):
+        (tmp_path / "2026-06-01").mkdir()
         (tmp_path / "2026-07-01").mkdir()
-        assert find_previous_run_id(tmp_path, "2026-07-01") is None
+        result = find_previous_run_id(tmp_path, "2026-07-01")
+        assert result == "2026-06-01"
+        assert result != "2026-07-01"
