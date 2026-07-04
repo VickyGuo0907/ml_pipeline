@@ -1,0 +1,48 @@
+run_id: '2026-07-02'
+evaluated_at: '2026-07-02T19:13:07.020603+00:00'
+thresholds:
+  min_test_r2: 0.0
+  max_test_rmse: 0.1
+models:
+  ols_baseline:
+    status: registered
+    version: '8'
+    test_r2: 0.02522161309409543
+    train_r2: 0.047727481730446164
+    test_rmse: 0.05342115762531618
+    train_rmse: 0.05517959161326086
+  elastic_net:
+    status: registered
+    version: '8'
+    test_r2: 0.02065053834612207
+    train_r2: 0.02939867734159296
+    test_rmse: 0.05354626631758306
+    train_rmse: 0.05570809348748246
+  ridge_l2:
+    status: registered
+    version: '8'
+    test_r2: 0.025337847738141406
+    train_r2: 0.047727075739948055
+    test_rmse: 0.053417972504246236
+    train_rmse: 0.055179603375853536
+  lasso_l1:
+    status: registered
+    version: '8'
+    test_r2: 0.03226804645551862
+    train_r2: 0.041980583779018144
+    test_rmse: 0.05322772320995949
+    train_rmse: 0.055345843646042954
+  random_forest:
+    status: registered
+    version: '8'
+    test_r2: 0.005699992442042445
+    train_r2: 0.8395962431856944
+    test_rmse: 0.053953431380718356
+    train_rmse: 0.022646710279555858
+  lightgbm_gbm:
+    status: registered
+    version: '8'
+    test_r2: 0.048877969928203924
+    train_r2: 0.326488922880547
+    test_rmse: 0.052768952073350923
+    train_rmse: 0.04640558242684017
