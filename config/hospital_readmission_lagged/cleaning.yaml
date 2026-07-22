@@ -1,0 +1,30 @@
+# Hospital Readmission Lagged Pipeline — cleaning config
+#
+# Every source file here carries the same CMS hospital-directory metadata (Facility Name,
+# Address, City/Town, ZIP Code, County/Parish, Telephone Number, Footnote, Start/End Date).
+# None of it is a usable predictor, and leaving it in would collide with the spine's own
+# copies when Hospital_General_Information is direct-joined in Stage 5.
+impute_strategy: "median"
+
+drop_column_patterns:
+  - "Footnote"
+  - "Start Date"
+  - "End Date"
+  - "Facility Name"
+  - "Address"
+  - "City/Town"
+  - "ZIP Code"
+  - "County/Parish"
+  - "Telephone Number"
+
+# HCAHPS Linear Mean Value and Score are shared value columns that mix many unrelated
+# measure types before the Stage 5 pivot filters/splits them apart. Protecting them here
+# means they're neither dropped for high-missing nor globally median-imputed across
+# unrelated measures — Stage 5's per-measure pivot, then the per-column median fill in
+# src/features.py, impute them correctly instead.
+protect_columns:
+  - "HCAHPS Linear Mean Value"
+  - "Score"
+
+# Columns to check for exact duplicates (null = check all columns)
+duplicates_subset: null

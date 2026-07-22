@@ -1,0 +1,30 @@
+dag:
+  dag_id: hospital_readmission_lagged_pipeline
+  owner: data-eng
+  description: Lagged hospital readmission prediction — 2024 quality measures → 2025 pneumonia excess readmission ratio
+  schedule: "@monthly"
+  catchup: false
+  tags:
+    - ml
+    - biomedical
+    - clinical
+    - lagged
+
+tasks:
+  retries: 1
+  retry_delay_minutes: 5
+  train_models_retries: 0
+  enabled:
+    profile: true             # ydata-profiling HTML per source file
+    unsupervised_explore: true    # PCA + k-means hospital segmentation, required by the validation plan
+    drift_report: true        # Evidently drift vs previous training set
+
+directories:
+  landing: data/hospital_readmission_lagged/landing
+  raw: data/hospital_readmission_lagged/raw
+  interim: data/hospital_readmission_lagged/interim
+  features: data/hospital_readmission_lagged/features
+  benchmark: data/hospital_readmission_lagged/benchmark
+  reports: reports/hospital_readmission_lagged
+  config: config/hospital_readmission_lagged
+  reports_base_url: "http://localhost:8888/hospital_readmission_lagged"

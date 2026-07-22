@@ -1,0 +1,49 @@
+# Stage 07 — model training config for hospital_readmission_lagged pipeline
+#
+# Validation plan requires 1 unsupervised (see pipeline.yaml's unsupervised block) + 2+
+# supervised models: an elastic-net baseline and LightGBM, per the capstone proposal, plus
+# a random forest for the linear-vs-nonlinear contrast already established in
+# biomedical_clinical.
+#
+# Evaluation thresholds are left disabled (null): this is a brand-new lagged design with
+# no prior run to calibrate against, and the proposal explicitly treats a low-but-honest
+# R² as an acceptable, publishable result — don't gate registration on a guessed threshold
+# before a first real run establishes the baseline. Tighten these once real metrics exist.
+
+random_state: 42
+train_test_split: 0.80
+
+evaluation:
+  min_test_r2: null
+  max_test_rmse: null
+
+models:
+  - name: "elastic_net"
+    type: "elastic_net"
+    hyperparameters:
+      alpha: 0.01
+      l1_ratio: 0.5
+      max_iter: 2000
+
+  - name: "random_forest"
+    type: "random_forest"
+    hyperparameters:
+      n_estimators: 100
+      max_features: "sqrt"   # feature count isn't fixed ahead of time like biomedical_clinical's 10
+      random_state: 42
+      n_jobs: -1
+
+  - name: "lightgbm_gbm"
+    type: "gbm"
+    hyperparameters:
+      n_estimators: 100
+      learning_rate: 0.05
+      max_depth: 7
+      num_leaves: 31
+      min_child_samples: 20
+      subsample: 0.8
+      colsample_bytree: 0.8
+      reg_alpha: 0.0
+      reg_lambda: 1.0
+      random_state: 42
+      n_jobs: -1

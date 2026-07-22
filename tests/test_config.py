@@ -232,3 +232,72 @@ def test_orchestration_directories_config_has_benchmark_field():
         base_dir="config/base",
     )
     assert config.directories.benchmark == "data/biomedical_clinical/benchmark"
+
+
+LAGGED_CONFIG = "config/hospital_readmission_lagged"
+
+
+def test_load_hospital_readmission_lagged_pipeline_config():
+    """Test the lagged pipeline targets the 2025 HRRP file with a PN filter downstream."""
+    config = load_pipeline_config(LAGGED_CONFIG)
+    assert config.target.name == "Excess Readmission Ratio"
+    assert config.pipeline_type == "hospital_readmission_lagged"
+    assert config.train_test_split == 0.80
+    patterns = [pf.file_pattern for pf in config.validation.per_file_schemas]
+    assert "FY_2025_Hospital_Readmissions_Reduction_Program" in patterns
+    assert "Hospital_General_Information" in patterns
+
+
+def test_load_hospital_readmission_lagged_features_config():
+    """Test the lagged pipeline's features.yaml wires the 2025 spine + 2024 pivots/direct-join."""
+    config = load_features_config(LAGGED_CONFIG)
+    assert config.join_strategy.enabled is True
+    assert config.join_strategy.spine.file_pattern == "FY_2025_Hospital_Readmissions_Reduction_Program"
+    assert config.join_strategy.spine.measure_value == "READM-30-PN-HRRP"
+    pivot_patterns = [p.file_pattern for p in config.join_strategy.pivots]
+    assert "HCAHPS" in pivot_patterns
+    assert "Timely_and_Effective_Care" in pivot_patterns
+    assert "Complications_and_Deaths" in pivot_patterns
+    assert "Healthcare_Associated_Infections" in pivot_patterns
+    direct_patterns = [d.file_pattern for d in config.join_strategy.direct_joins]
+    assert "Hospital_General_Information" in direct_patterns
+    assert "Number of Readmissions" in config.drop_columns
+    assert "Predicted Readmission Rate" in config.drop_columns
+    assert "Expected Readmission Rate" in config.drop_columns
+
+
+def test_load_hospital_readmission_lagged_cleaning_config():
+    """Test the lagged pipeline protects sparse pivot-source Score/HCAHPS columns from imputation."""
+    config = load_cleaning_config(LAGGED_CONFIG)
+    assert "Score" in config.protect_columns
+    assert "HCAHPS Linear Mean Value" in config.protect_columns
+
+
+def test_load_hospital_readmission_lagged_models_config():
+    """Test the lagged pipeline's model ladder matches the capstone validation plan (2+ supervised)."""
+    config = load_models_config(LAGGED_CONFIG)
+    model_names = [m.name for m in config.models]
+    assert "elastic_net" in model_names
+    assert "lightgbm_gbm" in model_names
+    assert len(model_names) >= 2
+
+
+def test_hospital_readmission_lagged_orchestration_config():
+    """Test the lagged pipeline's DAG id and directories are wired independently of biomedical_clinical."""
+    config = load_pipeline_orchestration_config(
+        pipeline_dir=LAGGED_CONFIG,
+        base_dir="config/base",
+    )
+    assert config.dag.dag_id == "hospital_readmission_lagged_pipeline"
+    assert config.directories.landing == "data/hospital_readmission_lagged/landing"
+    assert config.directories.config == "config/hospital_readmission_lagged"
+    assert config.tasks.retries == 1  # inherited from base
+
+
+def test_discover_pipelines_includes_hospital_readmission_lagged():
+    """Test discover_pipelines picks up the new pipeline directory alongside the existing two."""
+    pipelines = discover_pipelines("config")
+    names = [p.name for p in pipelines]
+    assert "hospital_readmission_lagged" in names
+    assert "biomedical_clinical" in names
+    assert "bioinfo_gene" in names

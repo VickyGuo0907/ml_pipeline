@@ -1,0 +1,71 @@
+# Hospital Readmission Lagged Pipeline — feature engineering config
+#
+# Spine: 2025 HRRP file, filtered to the pneumonia measure (the target year).
+# Pivots: 4 long-format 2024 predictor files, pivoted wide on their own measure column.
+# Direct-join: Hospital_General_Information (2024) is already one row per hospital —
+# no pivot needed, just a left-join (see src/features.py's direct_joins support).
+join_strategy:
+  enabled: true
+  id_column: "Facility ID"
+  spine:
+    file_pattern: "FY_2025_Hospital_Readmissions_Reduction_Program"
+    measure_column: "Measure Name"
+    measure_value: "READM-30-PN-HRRP"
+  pivots:
+    - file_pattern: "HCAHPS"
+      measure_column: "HCAHPS Question"
+      measure_filter: "linear mean score"
+      value_column: "HCAHPS Linear Mean Value"
+      strip_suffix: " - linear mean score"
+    - file_pattern: "Timely_and_Effective_Care"
+      measure_column: "Measure ID"
+      measure_filter: ""       # keep all 26 process-of-care measures
+      value_column: "Score"
+      strip_suffix: ""
+    - file_pattern: "Complications_and_Deaths"
+      measure_column: "Measure ID"
+      measure_filter: ""       # keep all 19 measures, including MORT_30_PN (pneumonia mortality)
+      value_column: "Score"
+      strip_suffix: ""
+    - file_pattern: "Healthcare_Associated_Infections"
+      measure_column: "Measure ID"
+      # Each of the 6 HAI types reports 6 sub-metrics (numerator, eligible cases, CI
+      # bounds, device-days, SIR); only the standardized infection ratio (_SIR) is a
+      # non-redundant summary — the rest are the inputs used to compute it.
+      measure_filter: "_SIR"
+      value_column: "Score"
+      strip_suffix: ""
+  direct_joins:
+    - file_pattern: "Hospital_General_Information"
+
+# Encoding applied after the pivot/direct-join assembly
+encoding:
+  "State": "frequency"
+  "Hospital Type": "frequency"
+  "Hospital Ownership": "frequency"
+  "Emergency Services": "label"
+  "Meets criteria for promoting interoperability of EHRs": "label"
+  "Meets criteria for birthing friendly designation": "label"
+
+# Box-Cox transform on the target, matching biomedical_clinical (same underlying distribution)
+boxcox_target: true
+
+# VIF disabled: same rationale as biomedical_clinical — the pivoted quality measures are
+# correlated by design (many are components of the same CMS composite score), and the
+# capstone validation plan doesn't call for VIF pruning.
+vif_threshold: null
+
+# Near-zero variance filter (removes features where >=95% of values are identical)
+nzv_threshold: 0.95
+
+# Drop modeling-specific columns not needed in the feature matrix. Metadata columns are
+# already removed at the clean stage; these are the join key, the spine's filter column,
+# and the leakage columns the ratio is directly derived from (excess = predicted/expected).
+drop_columns:
+  - "Facility ID"
+  - "Measure Name"
+  - "Number of Readmissions"
+  - "Predicted Readmission Rate"
+  - "Expected Readmission Rate"
+
+scale: true
