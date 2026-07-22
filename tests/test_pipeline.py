@@ -1003,3 +1003,69 @@ class TestIntegration:
 
             clean_result = clean_raw_data(raw_dir, interim_dir, run_id, config_dir=HEALTHCARE_CONFIG)
             assert "hospital_data.csv" in clean_result["files"]
+
+
+_LAGGED_SOURCE_2024 = Path("data/hospitial_readmission_lagged/hospitals_annual_2024/hospitals_2024-10-30")
+_LAGGED_SOURCE_2025 = Path("data/hospitial_readmission_lagged/hospitals_annual_2025/hospitals_2025-11-26")
+_LAGGED_CONFIG = Path("config/hospital_readmission_lagged")
+
+_LAGGED_DATA_AVAILABLE = (
+    (_LAGGED_SOURCE_2024 / "Hospital_General_Information.csv").exists()
+    and (_LAGGED_SOURCE_2025 / "FY_2025_Hospital_Readmissions_Reduction_Program_Hospital.csv").exists()
+)
+
+
+@pytest.mark.skipif(
+    not _LAGGED_DATA_AVAILABLE,
+    reason="requires the local CMS hospitial_readmission_lagged raw data dump (gitignored, not checked in)",
+)
+class TestHospitalReadmissionLaggedIntegration:
+    """End-to-end run against the real CMS data: staging -> ingest -> validate -> clean -> features."""
+
+    def test_full_run_produces_leakage_free_matched_feature_matrix(self):
+        """The 2024->2025 join produces a plausible row count with no leakage columns."""
+        from scripts.stage_hospital_readmission_lagged_landing import stage_landing
+
+        landing_dir = Path("data/hospital_readmission_lagged/landing")
+        stage_landing(_LAGGED_SOURCE_2024, _LAGGED_SOURCE_2025, landing_dir)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            run_id = "test-e2e"
+
+            ingest_files(landing_dir=landing_dir, raw_dir=tmp / "raw", run_id=run_id)
+            validate_raw_files(raw_dir=tmp / "raw", run_id=run_id, config_dir=_LAGGED_CONFIG)
+            clean_raw_data(
+                raw_dir=tmp / "raw", interim_dir=tmp / "interim", run_id=run_id, config_dir=_LAGGED_CONFIG
+            )
+            result = engineer_features(
+                interim_dir=tmp / "interim",
+                features_dir=tmp / "features",
+                run_id=run_id,
+                config_dir=_LAGGED_CONFIG,
+            )
+
+            train_df = pd.read_parquet(tmp / "features" / run_id / "train.parquet")
+            test_df = pd.read_parquet(tmp / "features" / run_id / "test.parquet")
+            combined = pd.concat([train_df, test_df])
+            total_rows = result["train_shape"][0] + result["test_shape"][0]
+
+            print(f"\nhospital_readmission_lagged E2E: matched {total_rows} hospitals "
+                  f"({result['train_shape'][0]} train / {result['test_shape'][0]} test), "
+                  f"{combined.shape[1]} columns")
+
+            # Loose bound: proves the cross-year join actually matched a large, plausible
+            # slice of hospitals rather than 0, all ~5,394, or some other structurally wrong
+            # number. See this task's docstring note above for why an exact figure isn't
+            # hard-coded here.
+            assert 2000 <= total_rows <= 3200
+
+            leakage_columns = {
+                "Number of Readmissions", "Predicted Readmission Rate", "Expected Readmission Rate",
+                "Facility ID", "Measure Name",
+            }
+            assert not leakage_columns & set(combined.columns)
+
+            # Sanity: the direct-joined Hospital_General_Information source actually contributed.
+            assert "Hospital Ownership" in combined.columns
+            assert "Excess Readmission Ratio" in combined.columns

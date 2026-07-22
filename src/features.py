@@ -74,7 +74,13 @@ def _pivot_join_sources(interim_path: Path, join_config: JoinStrategyConfig) -> 
         # Normalise id_column to nullable int so float ("10001.0") and string ("010001")
         # both resolve to the same integer key before the join.
         if id_col in df.columns:
-            df[id_col] = pd.to_numeric(df[id_col], errors="coerce").astype("Int64")
+            numeric = pd.to_numeric(df[id_col], errors="coerce")
+            # Use list comprehension to avoid pandas' strict safe casting from float64 to Int64
+            df[id_col] = pd.Series(
+                [int(x) if pd.notna(x) else pd.NA for x in numeric],
+                index=df.index,
+                dtype="Int64"
+            )
 
         spine_cfg = join_config.spine
         if spine_cfg and spine_cfg.file_pattern in f.name:
