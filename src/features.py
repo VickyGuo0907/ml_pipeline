@@ -114,12 +114,30 @@ def _pivot_join_sources(interim_path: Path, join_config: JoinStrategyConfig) -> 
                     side_dfs.append(wide)
                 break
 
+        for direct_cfg in join_config.direct_joins:
+            if direct_cfg.file_pattern in f.name:
+                dupes = df[id_col].duplicated().sum()
+                if dupes:
+                    logger.warning(
+                        "Direct-join '%s' has %d duplicate %s — deduplicating", f.name, dupes, id_col
+                    )
+                    df = df.drop_duplicates(subset=[id_col], keep="first")
+                logger.info("Direct-join '%s' loaded: %d rows × %d cols", f.name, len(df), len(df.columns))
+                side_dfs.append(df)
+                break
+
     if spine_df is None:
         pattern = join_config.spine.file_pattern if join_config.spine else "?"
         raise FileNotFoundError(f"No spine file matching '{pattern}' found in {interim_path}")
 
     result = spine_df
     for side_df in side_dfs:
+        overlap = [c for c in side_df.columns if c != id_col and c in result.columns]
+        if overlap:
+            logger.warning(
+                "Dropping %d column(s) already present before merge: %s", len(overlap), overlap
+            )
+            side_df = side_df.drop(columns=overlap)
         result = result.merge(side_df, on=id_col, how="left")
 
     logger.info("Pivot-join result: %d rows × %d cols", len(result), len(result.columns))

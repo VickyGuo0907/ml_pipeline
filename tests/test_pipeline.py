@@ -841,6 +841,105 @@ class TestPivotJoin:
             assert result["train_shape"][0] + result["test_shape"][0] == 2
 
 
+_DIRECT_JOIN_FEATURES_YAML = """\
+join_strategy:
+  enabled: true
+  id_column: "Facility ID"
+  spine:
+    file_pattern: "readmissions"
+    measure_column: "Measure Name"
+    measure_value: "READM-30-PN-HRRP"
+  direct_joins:
+    - file_pattern: "hospital_info"
+encoding: {}
+nzv_threshold: 0.95
+drop_columns:
+  - "Facility ID"
+  - "Measure Name"
+scale: true
+"""
+
+
+class TestDirectJoin:
+    """Tests for direct-join feature assembly (wide sources merged without pivoting)."""
+
+    def _setup_config(self, config_dir: Path) -> None:
+        """Write minimal configs for direct-join tests."""
+        (config_dir / "pipeline.yaml").write_text(_PIVOT_JOIN_PIPELINE_YAML)
+        (config_dir / "features.yaml").write_text(_DIRECT_JOIN_FEATURES_YAML)
+        (config_dir / "models.yaml").write_text(_PIVOT_JOIN_MODELS_YAML)
+
+    def _make_interim(self, interim_dir: Path, run_id: str, hospital_info: pd.DataFrame) -> Path:
+        """Create spine + direct-join CSV files with a manifest."""
+        run_path = interim_dir / run_id
+        run_path.mkdir(parents=True)
+
+        spine = pd.DataFrame({
+            "Facility ID": [1001, 1002, 1003],
+            "State": ["NY", "CA", "TX"],
+            "Measure Name": ["READM-30-PN-HRRP"] * 3,
+            "Excess Readmission Ratio": [0.95, 1.05, 0.88],
+        })
+        spine.to_csv(run_path / "readmissions.csv", index=False)
+        hospital_info.to_csv(run_path / "hospital_info.csv", index=False)
+
+        import yaml
+        with open(run_path / "manifest.yaml", "w") as f:
+            yaml.dump({"files": {"readmissions.csv": {}, "hospital_info.csv": {}}}, f)
+
+        return interim_dir
+
+    def test_direct_join_appends_wide_source_without_pivot(self):
+        """A direct_joins source is left-joined as-is, no pivot applied."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            config_dir = tmp / "config"
+            features_dir = tmp / "features"
+            config_dir.mkdir(); features_dir.mkdir()
+            self._setup_config(config_dir)
+
+            hospital_info = pd.DataFrame({
+                "Facility ID": [1001, 1002, 1003],
+                "Hospital Type": ["Acute Care Hospitals", "Critical Access Hospitals", "Acute Care Hospitals"],
+                "Hospital overall rating": [3, 4, 2],
+            })
+            self._make_interim(tmp / "interim", "2026-07-10", hospital_info)
+
+            result = engineer_features(tmp / "interim", features_dir, "2026-07-10", config_dir)
+
+            train_df = pd.read_parquet(features_dir / "2026-07-10" / "train.parquet")
+            test_df = pd.read_parquet(features_dir / "2026-07-10" / "test.parquet")
+            combined = pd.concat([train_df, test_df])
+            assert "Hospital overall rating" in combined.columns
+            assert result["train_shape"][0] + result["test_shape"][0] == 3
+
+    def test_direct_join_drops_overlapping_columns_instead_of_suffixing(self):
+        """Columns already present from the spine are not duplicated with _x/_y suffixes."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            config_dir = tmp / "config"
+            features_dir = tmp / "features"
+            config_dir.mkdir(); features_dir.mkdir()
+            self._setup_config(config_dir)
+
+            # hospital_info also carries a "State" column that would collide with the spine's.
+            hospital_info = pd.DataFrame({
+                "Facility ID": [1001, 1002, 1003],
+                "State": ["ny", "ca", "tx"],
+                "Hospital overall rating": [3, 4, 2],
+            })
+            self._make_interim(tmp / "interim", "2026-07-10", hospital_info)
+
+            engineer_features(tmp / "interim", features_dir, "2026-07-10", config_dir)
+
+            train_df = pd.read_parquet(features_dir / "2026-07-10" / "train.parquet")
+            test_df = pd.read_parquet(features_dir / "2026-07-10" / "test.parquet")
+            combined = pd.concat([train_df, test_df])
+            assert "State_x" not in combined.columns
+            assert "State_y" not in combined.columns
+            assert "State" in combined.columns
+
+
 class TestIntegration:
     """End-to-end pipeline integration tests."""
 
