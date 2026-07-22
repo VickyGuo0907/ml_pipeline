@@ -5,7 +5,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from src.clean import clean_raw_data
+from src.clean import _apply_type_coercion, clean_raw_data
 from src.features import engineer_features
 from src.ingest import compute_file_hash, ingest_files
 from src.profile import profile_raw_files
@@ -714,6 +714,34 @@ class TestClean:
             facility_ids = set(cleaned["Facility ID"])
             assert facility_ids == {"010001", "010002", "010003", "010004", "01014F", "01019F"}
             assert cleaned["Facility ID"].isna().sum() == 0
+
+    def test_apply_type_coercion_protect_parameter_isolated(self):
+        """Direct unit test: _apply_type_coercion with protect parameter.
+
+        Verifies that columns in the protect list are not coerced to numeric,
+        even when >50% of values are numeric-parseable. This is crucial for
+        preserving legitimate non-numeric identifiers (e.g. alphanumeric CMS
+        Facility IDs like "01014F") that would otherwise become NaN.
+        """
+        # Build DataFrame with mostly numeric-parseable strings plus one alphanumeric value
+        df = pd.DataFrame({
+            "Facility ID": ["010001", "010002", "010003", "010004", "01014F", "01019F"],
+            "Score": ["1.0", "2.0", "3.0", "4.0", "5.0", "6.0"],
+        })
+
+        # Test WITH protection: Facility ID should remain unchanged (all values intact)
+        protected = _apply_type_coercion(df.copy(), sentinels=[], protect=["Facility ID"])
+        assert protected["Facility ID"].dtype == object  # still string
+        assert set(protected["Facility ID"]) == {"010001", "010002", "010003", "010004", "01014F", "01019F"}
+        assert protected["Facility ID"].isna().sum() == 0
+
+        # Test WITHOUT protection: Facility ID gets coerced to numeric, alphanumeric values → NaN
+        unprotected = _apply_type_coercion(df.copy(), sentinels=[], protect=[])
+        # The Score column should be coerced (>50% numeric)
+        assert unprotected["Score"].dtype in ["float64", "Int64"]
+        # Facility ID should ALSO be coerced since it's not protected
+        # (4 of 6 parse as int, which is >50%, so coercion happens)
+        assert unprotected["Facility ID"].isna().sum() == 2  # "01014F" and "01019F" → NaN
 
 
 class TestFeatures:

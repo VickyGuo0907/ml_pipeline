@@ -74,6 +74,8 @@ def _pivot_join_sources(interim_path: Path, join_config: JoinStrategyConfig) -> 
         # Normalise id_column to nullable int so float ("10001.0") and string ("010001")
         # both resolve to the same integer key before the join.
         if id_col in df.columns:
+            # Non-numeric values (e.g. alphanumeric CMS Facility IDs like "01014F") become <NA>;
+            # they will never match in the merge and are silently dropped — this is intentional.
             df[id_col] = pd.to_numeric(df[id_col], errors="coerce").astype("Int64")
 
         spine_cfg = join_config.spine
