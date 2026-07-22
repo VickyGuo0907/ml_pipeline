@@ -164,7 +164,11 @@ class CleaningConfig(BaseModel):
     )
     protect_columns: list[str] = Field(
         default_factory=list,
-        description="Columns excluded from the high-missing-value drop (useful for sparse pivot-join columns)",
+        description=(
+            "Columns excluded from the high-missing-value drop AND from Stage 4 imputation — "
+            "useful for sparse pivot-join value columns that mix multiple measure types and must "
+            "be imputed per-measure after the Stage 5 pivot, not globally here."
+        ),
     )
 
 
@@ -186,6 +190,15 @@ class JoinPivotConfig(BaseModel):
     strip_suffix: str = Field(default="", description="Suffix stripped from measure names when naming pivot columns")
 
 
+class JoinDirectConfig(BaseModel):
+    """Config for a side file that's already wide (one row per id_column) and gets left-joined
+    onto the spine as-is — no pivot. Used for sources like a hospital directory file where each
+    row is already one hospital with its own columns.
+    """
+
+    file_pattern: str = Field(description="Substring matched against filename to identify this direct-join file")
+
+
 class JoinStrategyConfig(BaseModel):
     """Multi-source pivot-join config for building wide feature matrices from long-format files."""
 
@@ -193,6 +206,10 @@ class JoinStrategyConfig(BaseModel):
     id_column: str = Field(default="Facility ID", description="Column used as join key across all sources")
     spine: JoinSpineConfig | None = Field(default=None, description="Primary file that provides the target and row count")
     pivots: list[JoinPivotConfig] = Field(default_factory=list, description="Side files to pivot wide and left-join onto the spine")
+    direct_joins: list[JoinDirectConfig] = Field(
+        default_factory=list,
+        description="Side files already wide (one row per id_column) that are left-joined directly onto the spine, no pivoting",
+    )
 
 
 class FeaturesConfig(BaseModel):

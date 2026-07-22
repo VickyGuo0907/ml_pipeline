@@ -5,6 +5,8 @@ from src.utils.config import (
     BenchmarkConfig,
     CleaningConfig,
     FeaturesConfig,
+    JoinDirectConfig,
+    JoinStrategyConfig,
     ModelsConfig,
     OrchestrationConfig,
     PipelineConfig,
@@ -163,6 +165,24 @@ def test_cleaning_config_defaults():
     assert config.impute_strategy == "median"
     assert config.drop_column_patterns == []
     assert config.duplicates_subset is None
+
+
+def test_join_strategy_config_direct_joins_default_empty():
+    """Test JoinStrategyConfig.direct_joins defaults to an empty list."""
+    config = JoinStrategyConfig()
+    assert config.direct_joins == []
+
+
+def test_join_strategy_config_accepts_direct_joins():
+    """Test JoinStrategyConfig parses a direct_joins list of file patterns."""
+    config = JoinStrategyConfig(
+        enabled=True,
+        id_column="Facility ID",
+        direct_joins=[{"file_pattern": "Hospital_General_Information"}],
+    )
+    assert len(config.direct_joins) == 1
+    assert isinstance(config.direct_joins[0], JoinDirectConfig)
+    assert config.direct_joins[0].file_pattern == "Hospital_General_Information"
 
 
 def test_pipeline_config_pipeline_type_default():
