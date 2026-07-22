@@ -669,6 +669,52 @@ class TestClean:
             cleaned = pd.read_csv(interim_dir / run_id / "test.csv")
             assert cleaned["Score"].isna().sum() == 2  # untouched, not globally median-filled
 
+    def test_clean_skips_type_coercion_for_protected_columns(self):
+        """A >50%-numeric-parseable protect_columns column keeps its non-numeric values.
+
+        Mirrors the CMS Facility ID convention where a minority of ids carry an
+        alphanumeric suffix (e.g. "01014F"). Without the fix, _apply_type_coercion
+        force-coerces the whole column to numeric (since >50% parse cleanly),
+        turning the alphanumeric ids into NaN, which Stage 4 imputation would then
+        silently collapse onto one shared median value.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            interim_dir = Path(tmpdir) / "interim"
+            raw_dir = Path(tmpdir) / "raw"
+            config_dir = Path(tmpdir) / "config"
+            interim_dir.mkdir()
+            raw_dir.mkdir()
+            config_dir.mkdir()
+
+            (config_dir / "pipeline.yaml").write_text(
+                'sources:\n  - name: test\n    path: data/landing\n    format: csv\n'
+                'target:\n  name: y\n  type: continuous\nproblem_type: regression\n'
+            )
+            (config_dir / "cleaning.yaml").write_text(
+                'impute_strategy: median\nprotect_columns:\n  - "Facility ID"\n'
+            )
+
+            run_id = "2026-07-22"
+            # 4 of 6 ids (>50%) are purely numeric; 2 carry the CMS alphanumeric suffix.
+            df = pd.DataFrame({
+                "Facility ID": ["010001", "010002", "010003", "010004", "01014F", "01019F"],
+                "Score": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+            })
+            csv_path = raw_dir / run_id
+            csv_path.mkdir(parents=True)
+            df.to_csv(csv_path / "test.csv", index=False)
+
+            import yaml
+            with open(csv_path / "manifest.yaml", "w") as f:
+                yaml.dump({"files": {"test.csv": {}}}, f)
+
+            clean_raw_data(raw_dir, interim_dir, run_id, config_dir=config_dir)
+
+            cleaned = pd.read_csv(interim_dir / run_id / "test.csv", dtype={"Facility ID": str})
+            facility_ids = set(cleaned["Facility ID"])
+            assert facility_ids == {"010001", "010002", "010003", "010004", "01014F", "01019F"}
+            assert cleaned["Facility ID"].isna().sum() == 0
+
 
 class TestFeatures:
     """Tests for feature engineering."""

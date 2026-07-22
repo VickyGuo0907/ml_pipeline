@@ -12,22 +12,34 @@ from src.utils.transforms import IMPUTE_REGISTRY, drop_pattern_columns
 logger = logging.getLogger(__name__)
 
 
-def _apply_type_coercion(df: pd.DataFrame, sentinels: list[str]) -> pd.DataFrame:
+def _apply_type_coercion(
+    df: pd.DataFrame, sentinels: list[str], protect: list[str] | None = None
+) -> pd.DataFrame:
     """Replace sentinel strings and coerce object columns to numeric where possible.
 
     Sentinel strings (e.g. "Not Available") are declared in pipeline.yaml under
     validation.sentinel_values so no Python changes are needed for new datasets.
+    Columns in `protect` are left untouched — forcing a mostly-numeric identifier
+    column to numeric can silently destroy legitimate non-numeric values (e.g. CMS
+    Facility IDs with an alphanumeric suffix for certain facility types), collapsing
+    them onto a single imputed value later. Downstream code that needs a numeric
+    join key (e.g. the feature-engineering join) does its own explicit, narrower
+    coercion where that tradeoff is intentional.
 
     Args:
         df: Raw DataFrame.
         sentinels: Strings to replace with NaN before numeric coercion.
+        protect: Column names exempt from numeric coercion.
 
     Returns:
         DataFrame with sentinel replacement and numeric coercion applied.
     """
     if sentinels:
         df = df.replace({v: None for v in sentinels})
+    protect = protect or []
     for col in df.select_dtypes(include=["object"]).columns:
+        if col in protect:
+            continue
         coerced = pd.to_numeric(df[col], errors="coerce")
         if coerced.notna().sum() > df[col].notna().sum() * 0.5:
             df[col] = coerced
@@ -74,7 +86,7 @@ def _clean_single_file(
     """
     initial_shape = df.shape
 
-    df = _apply_type_coercion(df, sentinels)
+    df = _apply_type_coercion(df, sentinels, protect=cleaning_config.protect_columns)
     df = _drop_high_missing(df, threshold=0.5, protect=cleaning_config.protect_columns)
     df, pattern_dropped = drop_pattern_columns(df, cleaning_config.drop_column_patterns)
 

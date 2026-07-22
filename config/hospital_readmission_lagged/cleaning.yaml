@@ -22,9 +22,16 @@ drop_column_patterns:
 # means they're neither dropped for high-missing nor globally median-imputed across
 # unrelated measures — Stage 5's per-measure pivot, then the per-column median fill in
 # src/features.py, impute them correctly instead.
+#
+# Facility ID: some Hospital_General_Information rows use an alphanumeric Facility ID
+# (e.g. "01014F") for certain facility types. Forcing it to numeric here would silently
+# collapse those hospitals onto one shared imputed ID before the join ever runs. The
+# feature-engineering join step already does its own explicit numeric coercion on this
+# column when actually building the join key, which is the right place for that tradeoff.
 protect_columns:
   - "HCAHPS Linear Mean Value"
   - "Score"
+  - "Facility ID"
 
 # Columns to check for exact duplicates (null = check all columns)
 duplicates_subset: null
