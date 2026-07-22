@@ -79,7 +79,11 @@ def _clean_single_file(
     df, pattern_dropped = drop_pattern_columns(df, cleaning_config.drop_column_patterns)
 
     impute_fn = IMPUTE_REGISTRY.get(cleaning_config.impute_strategy, IMPUTE_REGISTRY["median"])
+    protected = [c for c in cleaning_config.protect_columns if c in df.columns]
+    held_out = df[protected].copy() if protected else None
     df = impute_fn(df)
+    if held_out is not None:
+        df[protected] = held_out
 
     df = df.drop_duplicates(subset=cleaning_config.duplicates_subset)
 

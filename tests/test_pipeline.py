@@ -632,6 +632,43 @@ class TestClean:
 
             assert result["files"]["test.csv"]["rows_removed"] > 0
 
+    def test_clean_skips_imputation_for_protected_columns(self):
+        """protect_columns are left as NaN through Stage 4, not globally median-imputed."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            interim_dir = Path(tmpdir) / "interim"
+            raw_dir = Path(tmpdir) / "raw"
+            config_dir = Path(tmpdir) / "config"
+            interim_dir.mkdir()
+            raw_dir.mkdir()
+            config_dir.mkdir()
+
+            (config_dir / "pipeline.yaml").write_text(
+                'sources:\n  - name: test\n    path: data/landing\n    format: csv\n'
+                'target:\n  name: y\n  type: continuous\nproblem_type: regression\n'
+            )
+            (config_dir / "cleaning.yaml").write_text(
+                'impute_strategy: median\nprotect_columns:\n  - "Score"\n'
+            )
+
+            run_id = "2026-07-10"
+            df = pd.DataFrame({
+                "Facility ID": [1, 2, 3, 4],
+                "Measure ID": ["PSI_03", "PSI_04", "MORT_30_PN", "MORT_30_PN"],
+                "Score": [1.2, None, 0.08, None],
+            })
+            csv_path = raw_dir / run_id
+            csv_path.mkdir(parents=True)
+            df.to_csv(csv_path / "test.csv", index=False)
+
+            import yaml
+            with open(csv_path / "manifest.yaml", "w") as f:
+                yaml.dump({"files": {"test.csv": {}}}, f)
+
+            clean_raw_data(raw_dir, interim_dir, run_id, config_dir=config_dir)
+
+            cleaned = pd.read_csv(interim_dir / run_id / "test.csv")
+            assert cleaned["Score"].isna().sum() == 2  # untouched, not globally median-filled
+
 
 class TestFeatures:
     """Tests for feature engineering."""
