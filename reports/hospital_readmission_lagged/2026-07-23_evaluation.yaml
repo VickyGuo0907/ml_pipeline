@@ -1,0 +1,31 @@
+run_id: '2026-07-23'
+evaluated_at: '2026-07-23T01:00:30.074478+00:00'
+thresholds:
+  min_test_r2: null
+  max_test_rmse: null
+models:
+  elastic_net:
+    status: registered
+    version: '18'
+    test_r2: 0.23000619698612002
+    train_r2: 0.20987055020031575
+    test_rmse: 0.05401166842370706
+    train_rmse: 0.05311719363505523
+    drift_detected: false
+  random_forest:
+    status: registered
+    version: '18'
+    test_r2: 0.21951096735685371
+    train_r2: 0.8856226885397016
+    test_rmse: 0.05437851961288651
+    train_rmse: 0.02020951722646157
+    drift_detected: false
+  lightgbm_gbm:
+    status: registered
+    version: '18'
+    test_r2: 0.21252745190942313
+    train_r2: 0.6621778735675179
+    test_rmse: 0.054621256873560294
+    train_rmse: 0.03473202002437895
+    drift_detected: false
+run_champion: elastic_net
