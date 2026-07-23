@@ -1,7 +1,7 @@
 # Hospital Readmission Lagged Pipeline
 # Workflow: 2024 CMS Hospital Compare quality measures -> 2025 pneumonia excess readmission ratio
 # Companion to biomedical_clinical (contemporaneous 2024->2024 baseline); see
-# data/hospitial_readmission_lagged/PIPELINE_HANDOFF.md for the full capstone design rationale.
+# data/source_data/hospitial_readmission_lagged/PIPELINE_HANDOFF.md for the full capstone design rationale.
 
 pipeline_type: hospital_readmission_lagged
 

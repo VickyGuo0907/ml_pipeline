@@ -3,8 +3,8 @@
 Copies the 5 predictor files from the 2024-10-30 refresh and the 1 target file from the
 2025-11-26 refresh into data/hospital_readmission_lagged/landing/. Run this once before
 triggering the hospital_readmission_lagged_pipeline DAG (or any time the source refresh
-changes) — see data/hospitial_readmission_lagged/PIPELINE_HANDOFF.md for why these two
-specific refreshes were chosen and why Unplanned_Hospital_Visits-Hospital.csv is
+changes) — see data/source_data/hospitial_readmission_lagged/PIPELINE_HANDOFF.md for why
+these two specific refreshes were chosen and why Unplanned_Hospital_Visits-Hospital.csv is
 deliberately excluded (it carries a pneumonia readmission rate — leakage).
 """
 import argparse
@@ -15,9 +15,9 @@ from typing import Any
 # 2024 quarterly refresh used for every predictor — verified in PIPELINE_HANDOFF.md that
 # the HRRP target is identical across all four 2024 refreshes, so the choice of refresh
 # only matters for these predictor files, not for reproducing the target.
-DEFAULT_SOURCE_2024 = Path("data/hospitial_readmission_lagged/hospitals_annual_2024/hospitals_2024-10-30")
+DEFAULT_SOURCE_2024 = Path("data/source_data/hospitial_readmission_lagged/hospitals_annual_2024/hospitals_2024-10-30")
 # 2025 refresh that provides the target — one year ahead of the predictors above.
-DEFAULT_SOURCE_2025 = Path("data/hospitial_readmission_lagged/hospitals_annual_2025/hospitals_2025-11-26")
+DEFAULT_SOURCE_2025 = Path("data/source_data/hospitial_readmission_lagged/hospitals_annual_2025/hospitals_2025-11-26")
 DEFAULT_DEST = Path("data/hospital_readmission_lagged/landing")
 
 PREDICTOR_FILES_2024: list[str] = [

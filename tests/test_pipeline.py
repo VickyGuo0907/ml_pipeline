@@ -1079,8 +1079,8 @@ class TestIntegration:
             assert "hospital_data.csv" in clean_result["files"]
 
 
-_LAGGED_SOURCE_2024 = Path("data/hospitial_readmission_lagged/hospitals_annual_2024/hospitals_2024-10-30")
-_LAGGED_SOURCE_2025 = Path("data/hospitial_readmission_lagged/hospitals_annual_2025/hospitals_2025-11-26")
+_LAGGED_SOURCE_2024 = Path("data/source_data/hospitial_readmission_lagged/hospitals_annual_2024/hospitals_2024-10-30")
+_LAGGED_SOURCE_2025 = Path("data/source_data/hospitial_readmission_lagged/hospitals_annual_2025/hospitals_2025-11-26")
 _LAGGED_CONFIG = Path("config/hospital_readmission_lagged")
 
 _LAGGED_DATA_AVAILABLE = (
