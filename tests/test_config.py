@@ -259,6 +259,7 @@ def test_load_hospital_readmission_lagged_features_config():
     assert "Timely_and_Effective_Care" in pivot_patterns
     assert "Complications_and_Deaths" in pivot_patterns
     assert "Healthcare_Associated_Infections" in pivot_patterns
+    assert "Medicare_Hospital_Spending_Per_Patient" in pivot_patterns
     direct_patterns = [d.file_pattern for d in config.join_strategy.direct_joins]
     assert "Hospital_General_Information" in direct_patterns
     assert "Number of Readmissions" in config.drop_columns

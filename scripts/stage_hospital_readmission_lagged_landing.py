@@ -1,11 +1,9 @@
 """Stage the hospital_readmission_lagged landing zone from the raw CMS quarterly dumps.
 
-Copies the 5 predictor files from the 2024-10-30 refresh and the 1 target file from the
+Copies the 6 predictor files from the 2024-10-30 refresh and the 1 target file from the
 2025-11-26 refresh into data/hospital_readmission_lagged/landing/. Run this once before
 triggering the hospital_readmission_lagged_pipeline DAG (or any time the source refresh
-changes) — see data/source_data/hospitial_readmission_lagged/PIPELINE_HANDOFF.md for why
-these two specific refreshes were chosen and why Unplanned_Hospital_Visits-Hospital.csv is
-deliberately excluded (it carries a pneumonia readmission rate — leakage).
+changes).
 """
 import argparse
 import shutil
@@ -26,12 +24,13 @@ PREDICTOR_FILES_2024: list[str] = [
     "Complications_and_Deaths-Hospital.csv",
     "Healthcare_Associated_Infections-Hospital.csv",
     "Hospital_General_Information.csv",
+    "Medicare_Hospital_Spending_Per_Patient-Hospital.csv",
 ]
 TARGET_FILE_2025: str = "FY_2025_Hospital_Readmissions_Reduction_Program_Hospital.csv"
 
 
 def stage_landing(source_2024: Path, source_2025: Path, dest: Path) -> dict[str, Any]:
-    """Copy the 6 required lagged-pipeline files into the landing zone.
+    """Copy the 7 required lagged-pipeline files into the landing zone.
 
     Args:
         source_2024: Directory containing the 2024 quarterly refresh (predictors).
@@ -42,7 +41,7 @@ def stage_landing(source_2024: Path, source_2025: Path, dest: Path) -> dict[str,
         Dict mapping each staged filename to its destination path.
 
     Raises:
-        FileNotFoundError: If any of the 6 required source files is missing.
+        FileNotFoundError: If any of the 7 required source files is missing.
     """
     missing = [
         str(source_2024 / name) for name in PREDICTOR_FILES_2024 if not (source_2024 / name).exists()
@@ -71,7 +70,7 @@ def stage_landing(source_2024: Path, source_2025: Path, dest: Path) -> dict[str,
     if extra:
         print(
             f"Warning: {dest} contains {len(extra)} file(s) not managed by this script: {extra}. "
-            "Landing zone must contain only the 6 staged files so file_pattern matches stay unambiguous."
+            "Landing zone must contain only the 7 staged files so file_pattern matches stay unambiguous."
         )
 
     return staged

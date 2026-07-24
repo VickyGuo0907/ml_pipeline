@@ -1,7 +1,7 @@
 # Hospital Readmission Lagged Pipeline — feature engineering config
 #
 # Spine: 2025 HRRP file, filtered to the pneumonia measure (the target year).
-# Pivots: 4 long-format 2024 predictor files, pivoted wide on their own measure column.
+# Pivots: 5 long-format 2024 predictor files, pivoted wide on their own measure column.
 # Direct-join: Hospital_General_Information (2024) is already one row per hospital —
 # no pivot needed, just a left-join (see src/features.py's direct_joins support).
 join_strategy:
@@ -33,6 +33,13 @@ join_strategy:
       # bounds, device-days, SIR); only the standardized infection ratio (_SIR) is a
       # non-redundant summary — the rest are the inputs used to compute it.
       measure_filter: "_SIR"
+      value_column: "Score"
+      strip_suffix: ""
+    - file_pattern: "Medicare_Hospital_Spending_Per_Patient"
+      measure_column: "Measure ID"
+      # A cost/utilization signal — nothing else in this predictor set touches spending.
+      # File carries only one measure (MSPB-1), verified against the raw 2024 data.
+      measure_filter: "MSPB-1"
       value_column: "Score"
       strip_suffix: ""
   direct_joins:

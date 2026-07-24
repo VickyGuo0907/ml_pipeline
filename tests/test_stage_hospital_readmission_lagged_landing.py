@@ -17,10 +17,10 @@ def _touch(path: Path, content: str = "Facility ID,Value\n1,1\n") -> None:
 
 
 class TestStageLanding:
-    """Tests for stage_landing copying the 6 required files into the landing zone."""
+    """Tests for stage_landing copying the required files into the landing zone."""
 
-    def test_stage_landing_copies_all_six_files(self):
-        """All 5 predictor files (2024) and the 1 target file (2025) land in dest."""
+    def test_stage_landing_copies_all_predictor_and_target_files(self):
+        """Every predictor file (2024) and the target file (2025) land in dest."""
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp = Path(tmpdir)
             source_2024 = tmp / "hospitals_2024-10-30"
@@ -35,7 +35,7 @@ class TestStageLanding:
 
             result = stage_landing(source_2024, source_2025, dest)
 
-            assert len(result) == 6
+            assert len(result) == len(PREDICTOR_FILES_2024) + 1
             for name in [*PREDICTOR_FILES_2024, TARGET_FILE_2025]:
                 assert (dest / name).exists()
 

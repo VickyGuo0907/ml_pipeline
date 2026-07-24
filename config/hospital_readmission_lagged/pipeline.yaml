@@ -77,6 +77,12 @@ validation:
         - "Facility ID"
       min_rows: 1000
 
+    - file_pattern: "Medicare_Hospital_Spending_Per_Patient"
+      required_columns:
+        - "Facility ID"
+        - "Measure ID"         # needed for the pivot in the feature stage
+      min_rows: 1000
+
 profiling:
   minimal: false
 
