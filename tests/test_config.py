@@ -268,10 +268,15 @@ def test_load_hospital_readmission_lagged_features_config():
 
 
 def test_load_hospital_readmission_lagged_cleaning_config():
-    """Test the lagged pipeline protects sparse pivot-source Score/HCAHPS columns from imputation."""
+    """Test the lagged pipeline protects sparse pivot-source columns and the target from imputation."""
     config = load_cleaning_config(LAGGED_CONFIG)
     assert "Score" in config.protect_columns
     assert "HCAHPS Linear Mean Value" in config.protect_columns
+    assert "Facility ID" in config.protect_columns
+    # Excess Readmission Ratio must be protected: at Stage 4 it still mixes all 6 HRRP
+    # measures, so median-imputing it fabricates target values for hospitals with no real
+    # 2025 pneumonia ratio. See config/hospital_readmission_lagged/cleaning.yaml's comment.
+    assert "Excess Readmission Ratio" in config.protect_columns
 
 
 def test_load_hospital_readmission_lagged_models_config():

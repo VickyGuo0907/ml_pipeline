@@ -28,10 +28,18 @@ drop_column_patterns:
 # collapse those hospitals onto one shared imputed ID before the join ever runs. The
 # feature-engineering join step already does its own explicit numeric coercion on this
 # column when actually building the join key, which is the right place for that tradeoff.
+#
+# Excess Readmission Ratio: the target column. At Stage 4 this file hasn't been filtered
+# to the PN measure yet, so it mixes all 6 HRRP measures (AMI, CABG, COPD, HF, PN, STK) in
+# one column. Median-imputing it here fills genuinely-missing 2025 pneumonia ratios with a
+# cross-measure median — fabricating target values for hospitals with no real outcome.
+# Protecting it means those NaNs survive to engineer_features' dropna(subset=[target_col]),
+# which correctly excludes those hospitals instead of training/testing on a made-up number.
 protect_columns:
   - "HCAHPS Linear Mean Value"
   - "Score"
   - "Facility ID"
+  - "Excess Readmission Ratio"
 
 # Columns to check for exact duplicates (null = check all columns)
 duplicates_subset: null
