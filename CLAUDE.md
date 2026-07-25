@@ -65,6 +65,8 @@ ml-pipeline/
 ├── data/
 │   ├── biomedical_clinical/{landing,raw,interim,features}/
 │   └── bioinfo_gene/{landing,raw,interim,features}/
+├── scripts/
+│   └── stage_<pipeline>_landing.py  # one-off landing-zone prep, pipeline-specific; see scripts/README.md
 ├── mlflow-artifacts/
 ├── reports/
 ├── tests/{test_schemas.py, test_clean.py, test_features.py, test_integration.py}

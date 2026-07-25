@@ -1,0 +1,49 @@
+run_id: '2026-07-25'
+evaluated_at: '2026-07-25T17:09:39.496592+00:00'
+thresholds:
+  min_test_r2: 0.0
+  max_test_rmse: 0.12
+models:
+  elastic_net:
+    status: registered
+    version: '21'
+    test_r2: 0.23362364488417664
+    train_r2: 0.2282435087975654
+    test_rmse: 0.05846274848535014
+    train_rmse: 0.055472645084639796
+    test_rmse_ci:
+    - 0.05481828469783605
+    - 0.062117965516463765
+    test_r2_ci:
+    - 0.17764306329492577
+    - 0.28463261651414
+    drift_detected: false
+  random_forest:
+    status: registered
+    version: '21'
+    test_r2: 0.1780211697878149
+    train_r2: 0.8851226296348083
+    test_rmse: 0.060546423816467694
+    train_rmse: 0.021402079454712883
+    test_rmse_ci:
+    - 0.05687955610204375
+    - 0.06420862452600186
+    test_r2_ci:
+    - 0.12767740151350213
+    - 0.22671002374870394
+    drift_detected: false
+  lightgbm_gbm:
+    status: registered
+    version: '21'
+    test_r2: 0.18950299001498105
+    train_r2: 0.6663821929553011
+    test_rmse: 0.060122065000083234
+    train_rmse: 0.036472315905097155
+    test_rmse_ci:
+    - 0.0561683603237743
+    - 0.06377641276298715
+    test_r2_ci:
+    - 0.11148904292230395
+    - 0.2557664400067885
+    drift_detected: false
+run_champion: elastic_net

@@ -1,4 +1,5 @@
 """Data drift monitoring using Evidently AI."""
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -10,6 +11,39 @@ try:
 except ImportError:
     Report = None
     DatasetDriftMetric = None
+
+logger = logging.getLogger(__name__)
+
+
+def _align_columns(reference_df: pd.DataFrame, current_df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Restrict both frames to their common columns before drift comparison.
+
+    Two runs' feature matrices can legitimately have different columns — e.g. the
+    near-zero-variance filter in feature engineering can keep or drop a column
+    differently depending on that run's population, or a pipeline's predictor set
+    can change between runs. Evidently assumes reference and current share the
+    same columns and raises a KeyError deep inside its drift calculation if they
+    don't; comparing only what both runs actually have is the correct behavior,
+    not a workaround — a column absent from one side can't have its drift
+    assessed against the other anyway.
+
+    Args:
+        reference_df: Baseline feature matrix to compare against.
+        current_df: Current feature matrix.
+
+    Returns:
+        (reference_df, current_df) restricted to their common columns, in the
+        same relative order as reference_df.
+    """
+    common = [c for c in reference_df.columns if c in current_df.columns]
+    reference_only = set(reference_df.columns) - set(common)
+    current_only = set(current_df.columns) - set(common)
+    if reference_only or current_only:
+        logger.warning(
+            "Drift comparison: %d common column(s); reference-only=%s, current-only=%s",
+            len(common), sorted(reference_only), sorted(current_only),
+        )
+    return reference_df[common], current_df[common]
 
 
 def _run_drift_metric(reference_df: pd.DataFrame, current_df: pd.DataFrame) -> Any | None:
@@ -25,11 +59,13 @@ def _run_drift_metric(reference_df: pd.DataFrame, current_df: pd.DataFrame) -> A
     """
     if Report is None or DatasetDriftMetric is None:
         return None
+    reference_df, current_df = _align_columns(reference_df, current_df)
     try:
         report = Report(metrics=[DatasetDriftMetric()])
         report.run(reference_data=reference_df, current_data=current_df)
         return report
     except Exception:
+        logger.exception("Evidently drift report failed")
         return None
 
 
@@ -50,7 +86,11 @@ def compute_drift_detected(reference_df: pd.DataFrame, current_df: pd.DataFrame)
     report = _run_drift_metric(reference_df, current_df)
     if report is None:
         return None
-    return report.as_dict()["metrics"][0].get("result", {}).get("dataset_drift", None)
+    try:
+        return report.as_dict()["metrics"][0].get("result", {}).get("dataset_drift", None)
+    except Exception:
+        logger.exception("Could not read dataset_drift result from Evidently report")
+        return None
 
 
 def generate_drift_report(
@@ -103,9 +143,13 @@ def generate_drift_report(
 
             if report is not None:
                 report_path = reports_path / f"{run_id}_drift_report.html"
-                report.save_html(str(report_path))
-                drift_results["report_path"] = str(report_path)
-                drift_results["drift_detected"] = report.as_dict()["metrics"][0].get("result", {}).get("dataset_drift", None)
+                try:
+                    report.save_html(str(report_path))
+                    drift_results["report_path"] = str(report_path)
+                    drift_results["drift_detected"] = report.as_dict()["metrics"][0].get("result", {}).get("dataset_drift", None)
+                except Exception as e:
+                    logger.exception("Evidently report rendering failed")
+                    drift_results["warning"] = f"Evidently report rendering failed: {e}"
             else:
                 drift_results["warning"] = "Evidently AI not available or report generation failed; skipping drift report"
         else:
@@ -115,8 +159,12 @@ def generate_drift_report(
         report = _run_drift_metric(current_df, current_df)
         if report is not None:
             report_path = reports_path / f"{run_id}_baseline_drift_report.html"
-            report.save_html(str(report_path))
-            drift_results["report_path"] = str(report_path)
+            try:
+                report.save_html(str(report_path))
+                drift_results["report_path"] = str(report_path)
+            except Exception as e:
+                logger.exception("Evidently baseline report rendering failed")
+                drift_results["warning"] = f"Evidently baseline report rendering failed: {e}"
         else:
             drift_results["warning"] = "Evidently AI not available or baseline report generation failed"
 

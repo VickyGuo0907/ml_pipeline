@@ -4,7 +4,10 @@ import pandas as pd
 import pytest
 import yaml
 
+from sklearn.metrics import r2_score
+
 from src.benchmark import (
+    bootstrap_metric_ci,
     bootstrap_rmse_ci,
     create_benchmark_snapshot,
     load_current_benchmark,
@@ -45,6 +48,50 @@ class TestBootstrapRmseCi:
         y_pred = rng.random(80)
         lower, upper = bootstrap_rmse_ci(y_true, y_pred, n_iterations=300)
         assert lower <= upper
+
+    def test_matches_bootstrap_metric_ci_with_an_rmse_function(self):
+        """bootstrap_rmse_ci must still be a thin RMSE-specific wrapper post-refactor —
+        same random_state must produce byte-identical bounds via the generic path."""
+        rng = np.random.default_rng(9)
+        y_true = pd.Series(rng.random(60))
+        y_pred = rng.random(60)
+
+        def _rmse(yt, yp):
+            return float(np.sqrt(np.mean((yt - yp) ** 2)))
+
+        direct = bootstrap_rmse_ci(y_true, y_pred, n_iterations=250, random_state=11)
+        via_generic = bootstrap_metric_ci(y_true, y_pred, _rmse, n_iterations=250, random_state=11)
+        assert direct == via_generic
+
+
+class TestBootstrapMetricCi:
+    """Tests for the generic bootstrap CI helper (used directly by src/train.py for R²)."""
+
+    def test_perfect_predictions_give_zero_width_r2_ci(self):
+        y_true = pd.Series([1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
+        y_pred = np.array([1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
+        lower, upper = bootstrap_metric_ci(y_true, y_pred, r2_score, n_iterations=200)
+        assert lower == pytest.approx(1.0, abs=1e-9)
+        assert upper == pytest.approx(1.0, abs=1e-9)
+
+    def test_noisier_predictions_give_lower_r2_ci(self):
+        rng = np.random.default_rng(2)
+        y_true = pd.Series(np.arange(100, dtype=float))
+        good_pred = np.arange(100, dtype=float) + rng.normal(0, 0.1, 100)
+        bad_pred = np.arange(100, dtype=float) + rng.normal(0, 20.0, 100)
+
+        good_lower, good_upper = bootstrap_metric_ci(y_true, good_pred, r2_score, n_iterations=500)
+        bad_lower, bad_upper = bootstrap_metric_ci(y_true, bad_pred, r2_score, n_iterations=500)
+
+        assert bad_upper < good_lower  # non-overlapping, bad is clearly worse
+
+    def test_is_reproducible_with_fixed_random_state(self):
+        y_true = pd.Series(np.arange(50, dtype=float))
+        y_pred = np.arange(50, dtype=float) + 1.0
+
+        result_1 = bootstrap_metric_ci(y_true, y_pred, r2_score, n_iterations=300, random_state=7)
+        result_2 = bootstrap_metric_ci(y_true, y_pred, r2_score, n_iterations=300, random_state=7)
+        assert result_1 == result_2
 
 
 class TestBenchmarkSnapshot:

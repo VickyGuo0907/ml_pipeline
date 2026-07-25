@@ -145,6 +145,51 @@ class TestRegisterModelsToMlflow:
         )
 
     @patch("src.evaluate.mlflow")
+    def test_registered_report_includes_bootstrap_cis_when_present(self, mock_mlflow, config_dir, tmp_path):
+        mock_mlflow.get_run.return_value = _mock_run({
+            "test_rmse": 0.2, "test_r2": 0.8, "train_rmse": 0.1, "train_r2": 0.85,
+            "test_rmse_ci_lower": 0.15, "test_rmse_ci_upper": 0.25,
+            "test_r2_ci_lower": 0.7, "test_r2_ci_upper": 0.9,
+        })
+        mock_mlflow.register_model.return_value = MagicMock(version="1")
+        mock_mlflow.tracking.MlflowClient.return_value = MagicMock()
+        reports_dir = tmp_path / "reports"
+
+        register_models_to_mlflow(
+            mlflow_run_ids={"ridge_baseline": "run123"},
+            config_dir=config_dir,
+            run_id="2026-07-02",
+            reports_dir=reports_dir,
+        )
+
+        report = yaml.safe_load((reports_dir / "2026-07-02_evaluation.yaml").read_text())
+        model_report = report["models"]["ridge_baseline"]
+        assert model_report["test_rmse_ci"] == [0.15, 0.25]
+        assert model_report["test_r2_ci"] == [0.7, 0.9]
+
+    @patch("src.evaluate.mlflow")
+    def test_report_omits_cis_gracefully_when_absent(self, mock_mlflow, config_dir, tmp_path):
+        """Runs logged before this feature existed have no CI metrics — must not crash."""
+        mock_mlflow.get_run.return_value = _mock_run(
+            {"test_rmse": 0.2, "test_r2": 0.8, "train_rmse": 0.1, "train_r2": 0.85}
+        )
+        mock_mlflow.register_model.return_value = MagicMock(version="1")
+        mock_mlflow.tracking.MlflowClient.return_value = MagicMock()
+        reports_dir = tmp_path / "reports"
+
+        register_models_to_mlflow(
+            mlflow_run_ids={"ridge_baseline": "run123"},
+            config_dir=config_dir,
+            run_id="2026-07-02",
+            reports_dir=reports_dir,
+        )
+
+        report = yaml.safe_load((reports_dir / "2026-07-02_evaluation.yaml").read_text())
+        model_report = report["models"]["ridge_baseline"]
+        assert model_report["test_rmse_ci"] is None
+        assert model_report["test_r2_ci"] is None
+
+    @patch("src.evaluate.mlflow")
     def test_raises_when_all_models_rejected(self, mock_mlflow, config_dir, tmp_path):
         """A run where nothing passes the gate must fail the task, not go green silently."""
         mock_mlflow.get_run.return_value = _mock_run(

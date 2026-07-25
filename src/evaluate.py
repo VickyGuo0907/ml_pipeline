@@ -234,6 +234,14 @@ def register_models_to_mlflow(
             test_mse = metrics.get("test_mse", 0.0)
             test_r2 = metrics.get("test_r2")
             train_r2 = metrics.get("train_r2")
+            # Bootstrapped 95% CIs on the held-out test metrics (added in src/train.py).
+            # .get() defaults to None so runs logged before this existed don't break.
+            test_rmse_ci = None
+            if metrics.get("test_rmse_ci_lower") is not None and metrics.get("test_rmse_ci_upper") is not None:
+                test_rmse_ci = [metrics["test_rmse_ci_lower"], metrics["test_rmse_ci_upper"]]
+            test_r2_ci = None
+            if metrics.get("test_r2_ci_lower") is not None and metrics.get("test_r2_ci_upper") is not None:
+                test_r2_ci = [metrics["test_r2_ci_lower"], metrics["test_r2_ci_upper"]]
             model_type = run_tags.get("model_type", "unknown")
             pipeline_type = run_tags.get("pipeline_type", "unknown")
             pipeline_run_id = run_tags.get("run_id", run_id)
@@ -267,6 +275,8 @@ def register_models_to_mlflow(
                     "train_r2": train_r2,
                     "test_rmse": test_rmse,
                     "train_rmse": train_rmse,
+                    "test_rmse_ci": test_rmse_ci,
+                    "test_r2_ci": test_r2_ci,
                 }
                 registration_results["registered_models"][model_name] = {
                     "status": "rejected",
@@ -314,6 +324,10 @@ def register_models_to_mlflow(
                 version_tags["test_r2"] = f"{test_r2:.4f}"
             if train_r2 is not None:
                 version_tags["train_r2"] = f"{train_r2:.4f}"
+            if test_rmse_ci is not None:
+                version_tags["test_rmse_ci_95"] = f"[{test_rmse_ci[0]:.4f}, {test_rmse_ci[1]:.4f}]"
+            if test_r2_ci is not None:
+                version_tags["test_r2_ci_95"] = f"[{test_r2_ci[0]:.4f}, {test_r2_ci[1]:.4f}]"
             if regression_info is not None:
                 version_tags["regression_vs_production"] = str(regression_info["regression_vs_production"]).lower()
             if drift_detected is not None:
@@ -368,6 +382,8 @@ def register_models_to_mlflow(
                 "train_r2": train_r2,
                 "test_rmse": test_rmse,
                 "train_rmse": train_rmse,
+                "test_rmse_ci": test_rmse_ci,
+                "test_r2_ci": test_r2_ci,
             }
             if regression_info is not None:
                 report["models"][model_name].update(regression_info)

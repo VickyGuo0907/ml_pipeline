@@ -42,3 +42,8 @@ Thumbs.db
 
 # Claude Code local state (local settings, worktrees)
 .claude/
+
+# Jupyter
+.ipynb_checkpoints/
+
+docs/**

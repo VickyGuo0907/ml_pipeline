@@ -288,6 +288,13 @@ def test_load_hospital_readmission_lagged_models_config():
     assert len(model_names) >= 2
 
 
+def test_hospital_readmission_lagged_evaluation_thresholds_are_calibrated():
+    """Thresholds were set from the first honest real run — no longer left null/disabled."""
+    config = load_models_config(LAGGED_CONFIG)
+    assert config.evaluation.min_test_r2 == 0.0
+    assert config.evaluation.max_test_rmse == 0.12
+
+
 def test_hospital_readmission_lagged_orchestration_config():
     """Test the lagged pipeline's DAG id and directories are wired independently of biomedical_clinical."""
     config = load_pipeline_orchestration_config(

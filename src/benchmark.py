@@ -10,7 +10,7 @@ every run, so it isn't a stable benchmark).
 """
 import logging
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import numpy as np
 import pandas as pd
@@ -103,6 +103,47 @@ def load_current_benchmark(benchmark_dir: str | Path) -> pd.DataFrame | None:
     return pd.read_parquet(benchmark_path)
 
 
+def bootstrap_metric_ci(
+    y_true: pd.Series,
+    y_pred: np.ndarray,
+    metric_fn: Callable[[np.ndarray, np.ndarray], float],
+    n_iterations: int = 1000,
+    confidence: float = 0.95,
+    random_state: int = 42,
+) -> tuple[float, float]:
+    """Bootstrap a confidence interval for any (y_true, y_pred) -> scalar metric.
+
+    Generic resampling helper shared by the RMSE-specific champion/challenger
+    check (bootstrap_rmse_ci below) and per-model test-metric CIs (RMSE and R²)
+    computed in src/train.py.
+
+    Args:
+        y_true: Ground-truth target values.
+        y_pred: Model predictions, same length and order as y_true.
+        metric_fn: Scores one resample, e.g. sklearn's r2_score or an RMSE lambda.
+        n_iterations: Number of bootstrap resamples.
+        confidence: Confidence level (e.g. 0.95 for a 95% CI).
+        random_state: Seed for reproducibility.
+
+    Returns:
+        (lower, upper) bound of the metric's confidence interval.
+    """
+    rng = np.random.default_rng(random_state)
+    y_true_arr = np.asarray(y_true, dtype=float)
+    y_pred_arr = np.asarray(y_pred, dtype=float)
+    n = len(y_true_arr)
+
+    values = np.empty(n_iterations)
+    for i in range(n_iterations):
+        idx = rng.integers(0, n, size=n)
+        values[i] = metric_fn(y_true_arr[idx], y_pred_arr[idx])
+
+    alpha = 1 - confidence
+    lower = float(np.percentile(values, 100 * (alpha / 2)))
+    upper = float(np.percentile(values, 100 * (1 - alpha / 2)))
+    return lower, upper
+
+
 def bootstrap_rmse_ci(
     y_true: pd.Series,
     y_pred: np.ndarray,
@@ -111,6 +152,9 @@ def bootstrap_rmse_ci(
     random_state: int = 42,
 ) -> tuple[float, float]:
     """Bootstrap a confidence interval for RMSE via resampling.
+
+    Thin wrapper over bootstrap_metric_ci, kept as its own function since it's
+    the one used by the champion/challenger regression check in evaluate.py.
 
     Args:
         y_true: Ground-truth target values.
@@ -122,17 +166,7 @@ def bootstrap_rmse_ci(
     Returns:
         (lower, upper) bound of the RMSE confidence interval.
     """
-    rng = np.random.default_rng(random_state)
-    y_true_arr = np.asarray(y_true, dtype=float)
-    y_pred_arr = np.asarray(y_pred, dtype=float)
-    n = len(y_true_arr)
+    def _rmse(yt: np.ndarray, yp: np.ndarray) -> float:
+        return float(np.sqrt(np.mean((yt - yp) ** 2)))
 
-    rmses = np.empty(n_iterations)
-    for i in range(n_iterations):
-        idx = rng.integers(0, n, size=n)
-        rmses[i] = float(np.sqrt(np.mean((y_true_arr[idx] - y_pred_arr[idx]) ** 2)))
-
-    alpha = 1 - confidence
-    lower = float(np.percentile(rmses, 100 * (alpha / 2)))
-    upper = float(np.percentile(rmses, 100 * (1 - alpha / 2)))
-    return lower, upper
+    return bootstrap_metric_ci(y_true, y_pred, _rmse, n_iterations, confidence, random_state)

@@ -5,17 +5,20 @@
 # a random forest for the linear-vs-nonlinear contrast already established in
 # biomedical_clinical.
 #
-# Evaluation thresholds are left disabled (null): this is a brand-new lagged design with
-# no prior run to calibrate against, and the proposal explicitly treats a low-but-honest
-# R² as an acceptable, publishable result — don't gate registration on a guessed threshold
-# before a first real run establishes the baseline. Tighten these once real metrics exist.
-
+# Evaluation thresholds, calibrated against the first honest real run (2026-07-24, after
+# fixing the target-imputation bug — 2,731 real hospitals, not the earlier contaminated
+# 3,085): elastic_net test_r2=0.234, random_forest=0.178, lightgbm=0.190; test_rmse in
+# 0.0585-0.0605. min_test_r2 mirrors biomedical_clinical's "reject worse than predicting
+# the mean" floor — a low-but-honest R² is an acceptable result per the proposal, but a
+# negative one indicates something broke. max_test_rmse is set at roughly 2x the worst
+# currently-registered model, matching biomedical_clinical's tuning philosophy: enough
+# headroom for normal run-to-run variation, tight enough to catch a real regression.
 random_state: 42
 train_test_split: 0.80
 
 evaluation:
-  min_test_r2: null
-  max_test_rmse: null
+  min_test_r2: 0.0
+  max_test_rmse: 0.12
 
 models:
   - name: "elastic_net"

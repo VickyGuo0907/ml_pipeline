@@ -10,6 +10,7 @@ import pandas as pd
 import yaml
 from sklearn.metrics import r2_score
 
+from src.benchmark import bootstrap_metric_ci
 from src.utils.config import load_models_config, load_pipeline_config
 from src.utils.model_registry import get_model
 
@@ -47,7 +48,12 @@ def _log_metrics(
     X_test: pd.DataFrame,
     y_test: pd.Series,
 ) -> tuple[dict[str, float], pd.Series]:
-    """Compute and log regression metrics for both splits.
+    """Compute and log regression metrics for both splits, plus bootstrapped 95%
+    confidence intervals on the held-out test metrics.
+
+    Point estimates alone (test_rmse, test_r2) don't convey how much they'd move
+    on a different random train/test split — the CIs bound that. Computed only
+    on the test set, since train-set CIs would just describe in-sample fit noise.
 
     Args:
         model: Trained estimator.
@@ -64,6 +70,12 @@ def _log_metrics(
     train_pred = model.predict(X_train)
     test_pred = model.predict(X_test)
 
+    def _rmse(yt, yp):
+        return float(((yt - yp) ** 2).mean() ** 0.5)
+
+    test_rmse_ci = bootstrap_metric_ci(y_test, test_pred, _rmse)
+    test_r2_ci = bootstrap_metric_ci(y_test, test_pred, r2_score)
+
     metrics = {
         "train_mse": float(((train_pred - y_train) ** 2).mean()),
         "test_mse": float(((test_pred - y_test) ** 2).mean()),
@@ -71,6 +83,10 @@ def _log_metrics(
         "test_rmse": float(((test_pred - y_test) ** 2).mean() ** 0.5),
         "train_r2": float(r2_score(y_train, train_pred)),
         "test_r2": float(r2_score(y_test, test_pred)),
+        "test_rmse_ci_lower": test_rmse_ci[0],
+        "test_rmse_ci_upper": test_rmse_ci[1],
+        "test_r2_ci_lower": test_r2_ci[0],
+        "test_r2_ci_upper": test_r2_ci[1],
     }
     for name, value in metrics.items():
         mlflow.log_metric(name, value)
