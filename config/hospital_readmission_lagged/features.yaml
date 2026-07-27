@@ -76,3 +76,7 @@ drop_columns:
   - "Expected Readmission Rate"
 
 scale: true
+# EDA found Number of Discharges heavily right-skewed (skew 2.76, kurtosis 16.6) — a
+# small number of very high-volume hospitals would otherwise pull StandardScaler's
+# mean/SD for every numeric feature. RobustScaler uses median/IQR instead.
+scaler: "robust"

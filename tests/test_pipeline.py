@@ -816,6 +816,81 @@ train_test_split: 0.8
             assert (features_dir / run_id / "train.parquet").exists()
             assert (features_dir / run_id / "test.parquet").exists()
 
+    def _run_with_scaler(self, tmpdir: Path, scaler_line: str) -> pd.DataFrame:
+        """Run engineer_features on a fixed skewed column, return the combined scaled output."""
+        interim_dir = Path(tmpdir) / "interim"
+        features_dir = Path(tmpdir) / "features"
+        config_dir = Path(tmpdir) / "config"
+        interim_dir.mkdir(); features_dir.mkdir(); config_dir.mkdir()
+
+        run_id = "2026-05-18"
+        df = pd.DataFrame({
+            "volume": [1.0, 2.0, 3.0, 4.0, 100.0],  # one extreme outlier, like case volume
+            "ExcessReadmissionRatio": [0.9, 1.0, 0.8, 1.1, 0.85],
+        })
+        csv_path = interim_dir / run_id
+        csv_path.mkdir(parents=True)
+        df.to_csv(csv_path / "test.csv", index=False)
+
+        import yaml
+        with open(csv_path / "manifest.yaml", "w") as f:
+            yaml.dump({"files": {"test.csv": {}}}, f)
+
+        (config_dir / "pipeline.yaml").write_text("""
+sources:
+  - name: test
+    path: data/landing
+    format: csv
+target:
+  name: ExcessReadmissionRatio
+  type: continuous
+problem_type: regression
+train_test_split: 0.8
+random_state: 42
+""")
+        (config_dir / "features.yaml").write_text(f"""
+encoding: {{}}
+nzv_threshold: 0.95
+drop_columns: []
+scale: true
+{scaler_line}
+""")
+        (config_dir / "models.yaml").write_text("""
+models:
+  - name: linear_baseline
+    type: linear
+    hyperparameters: {}
+random_state: 42
+train_test_split: 0.8
+""")
+
+        engineer_features(interim_dir, features_dir, run_id, config_dir)
+        train_df = pd.read_parquet(features_dir / run_id / "train.parquet")
+        test_df = pd.read_parquet(features_dir / run_id / "test.parquet")
+        return pd.concat([train_df, test_df])
+
+    def test_scaler_config_selects_robust_scaler(self, tmp_path):
+        """features.yaml's scaler: robust must actually apply RobustScaler, not StandardScaler."""
+        from sklearn.preprocessing import RobustScaler
+
+        combined = self._run_with_scaler(tmp_path, 'scaler: "robust"')
+
+        raw = pd.DataFrame({"volume": [1.0, 2.0, 3.0, 4.0, 100.0]})
+        expected = RobustScaler().fit_transform(raw).flatten()
+
+        assert sorted(combined["volume"].tolist()) == pytest.approx(sorted(expected.tolist()), abs=1e-6)
+
+    def test_scaler_defaults_to_standard_when_unset(self, tmp_path):
+        """Omitting `scaler` must reproduce the pre-existing StandardScaler behavior exactly."""
+        from sklearn.preprocessing import StandardScaler
+
+        combined = self._run_with_scaler(tmp_path, "")
+
+        raw = pd.DataFrame({"volume": [1.0, 2.0, 3.0, 4.0, 100.0]})
+        expected = StandardScaler().fit_transform(raw).flatten()
+
+        assert sorted(combined["volume"].tolist()) == pytest.approx(sorted(expected.tolist()), abs=1e-6)
+
 
 _PIVOT_JOIN_PIPELINE_YAML = """\
 sources:

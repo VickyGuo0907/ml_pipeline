@@ -223,6 +223,14 @@ class FeaturesConfig(BaseModel):
     )
     drop_columns: list[str] = Field(default_factory=list, description="Columns to drop")
     scale: bool = Field(default=True, description="Whether to scale features")
+    scaler: str = Field(
+        default="standard",
+        description=(
+            "Scaling strategy used when scale=True: 'standard' (mean/SD, sensitive to "
+            "outliers) or 'robust' (median/IQR — use when a feature has heavy skew/kurtosis, "
+            "e.g. hospital case volume)."
+        ),
+    )
     # SVG Stage 2: apply Box-Cox power transform to target before modeling
     boxcox_target: bool = Field(default=False, description="Apply Box-Cox transform to target")
     # SVG Stage 2: drop predictors with VIF > threshold; None disables

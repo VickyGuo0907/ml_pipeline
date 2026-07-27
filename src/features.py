@@ -6,7 +6,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import LabelEncoder, StandardScaler
+from sklearn.preprocessing import LabelEncoder, RobustScaler, StandardScaler
 
 from src.utils.config import JoinStrategyConfig, load_features_config, load_pipeline_config
 from src.utils.io import READERS, load_manifest, resolve_run_path, write_manifest
@@ -17,6 +17,14 @@ from src.utils.transforms import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Maps features.yaml's `scaler` string to a scikit-learn scaler class. Unknown strategies
+# fall back to StandardScaler (the pre-existing default, so omitting `scaler` from a
+# pipeline's features.yaml reproduces prior behavior exactly).
+SCALER_REGISTRY: dict[str, type] = {
+    "standard": StandardScaler,
+    "robust": RobustScaler,
+}
 
 
 def _encode_columns(df: pd.DataFrame, encoding_map: dict[str, str]) -> pd.DataFrame:
@@ -289,7 +297,8 @@ def engineer_features(
     if features_config.scale:
         numeric_cols = X.select_dtypes(include="number").columns.tolist()
         if numeric_cols:
-            scaler = StandardScaler()
+            scaler_cls = SCALER_REGISTRY.get(features_config.scaler, StandardScaler)
+            scaler = scaler_cls()
             X[numeric_cols] = scaler.fit_transform(X[numeric_cols])
 
     # Train/test split

@@ -24,7 +24,6 @@ venv/
 # Covers both flat layout and per-pipeline layout (data/<pipeline>/<stage>/)
 data/**
 data/source_data/**
-!data/**/
 !data/**/.gitkeep
 .data/
 

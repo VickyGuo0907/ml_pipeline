@@ -68,6 +68,7 @@ def test_load_features_config():
     assert isinstance(config, FeaturesConfig)
     assert config.nzv_threshold == 0.95
     assert config.scale is True
+    assert config.scaler == "standard"  # unset in this pipeline's YAML -> default, unchanged
     assert "State" in config.encoding
     assert config.encoding["State"] == "frequency"
     assert config.boxcox_target is True
@@ -153,6 +154,7 @@ def test_features_config_nzv_threshold_validation():
     assert config.nzv_threshold == 0.95
     assert config.boxcox_target is False  # default
     assert config.vif_threshold is None  # default
+    assert config.scaler == "standard"  # default
 
     invalid_data = {"encoding": {}, "nzv_threshold": 1.5}
     with pytest.raises(ValueError):
@@ -265,6 +267,8 @@ def test_load_hospital_readmission_lagged_features_config():
     assert "Number of Readmissions" in config.drop_columns
     assert "Predicted Readmission Rate" in config.drop_columns
     assert "Expected Readmission Rate" in config.drop_columns
+    # EDA found Number of Discharges heavily skewed (2.76) — robust scaler over standard.
+    assert config.scaler == "robust"
 
 
 def test_load_hospital_readmission_lagged_cleaning_config():
