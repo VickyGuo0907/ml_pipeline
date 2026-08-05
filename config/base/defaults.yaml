@@ -2,7 +2,7 @@
 # Override any field in config/<pipeline>/orchestration.yaml.
 
 dag:
-  start_date: "2024-01-01"
+  start_date: "2026-06-01"
 
 tasks:
   retries: 1

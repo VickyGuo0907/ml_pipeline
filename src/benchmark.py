@@ -17,7 +17,7 @@ import pandas as pd
 import yaml
 
 from src.ingest import compute_file_hash
-from src.utils.io import write_manifest
+from src.utils.io import resolve_run_path, write_manifest
 
 logger = logging.getLogger(__name__)
 
@@ -50,13 +50,13 @@ def create_benchmark_snapshot(
     Raises:
         FileNotFoundError: If this run's train.parquet doesn't exist.
     """
-    train_path = Path(features_dir) / run_id / "train.parquet"
+    train_path = resolve_run_path(features_dir, run_id) / "train.parquet"
     if not train_path.exists():
         raise FileNotFoundError(f"Train data not found: {train_path}")
 
     df = pd.read_parquet(train_path)
 
-    version_dir = Path(benchmark_dir) / run_id
+    version_dir = resolve_run_path(benchmark_dir, run_id)
     version_dir.mkdir(parents=True, exist_ok=True)
     benchmark_path = version_dir / BENCHMARK_FILENAME
     df.to_parquet(benchmark_path, index=False)

@@ -5,6 +5,8 @@ from typing import Any
 
 import pandas as pd
 
+from src.utils.io import resolve_run_path
+
 try:
     from evidently.report import Report
     from evidently.metrics import DatasetDriftMetric
@@ -69,6 +71,22 @@ def _run_drift_metric(reference_df: pd.DataFrame, current_df: pd.DataFrame) -> A
         return None
 
 
+def _extract_dataset_drift(report: Any) -> bool | None:
+    """Pull the dataset_drift boolean out of an Evidently Report's dict form.
+
+    No try/except here — both call sites already wrap this in their own,
+    with different fallback/logging behavior on failure, so the exception
+    is left to propagate to whichever caller invoked this.
+
+    Args:
+        report: An Evidently Report after .run() has completed.
+
+    Returns:
+        The dataset_drift boolean, or None if the report doesn't carry one.
+    """
+    return report.as_dict()["metrics"][0].get("result", {}).get("dataset_drift", None)
+
+
 def compute_drift_detected(reference_df: pd.DataFrame, current_df: pd.DataFrame) -> bool | None:
     """Return whether dataset drift was detected between two feature matrices.
 
@@ -87,7 +105,7 @@ def compute_drift_detected(reference_df: pd.DataFrame, current_df: pd.DataFrame)
     if report is None:
         return None
     try:
-        return report.as_dict()["metrics"][0].get("result", {}).get("dataset_drift", None)
+        return _extract_dataset_drift(report)
     except Exception:
         logger.exception("Could not read dataset_drift result from Evidently report")
         return None
@@ -115,7 +133,7 @@ def generate_drift_report(
     Raises:
         FileNotFoundError: If current feature files don't exist
     """
-    features_path = Path(features_dir) / run_id
+    features_path = resolve_run_path(features_dir, run_id)
     train_path = features_path / "train.parquet"
     reports_path = Path(reports_dir)
 
@@ -132,7 +150,7 @@ def generate_drift_report(
     }
 
     if previous_run_id:
-        previous_path = Path(features_dir) / previous_run_id / "train.parquet"
+        previous_path = resolve_run_path(features_dir, previous_run_id) / "train.parquet"
 
         if previous_path.exists():
             previous_df = pd.read_parquet(previous_path)
@@ -146,7 +164,7 @@ def generate_drift_report(
                 try:
                     report.save_html(str(report_path))
                     drift_results["report_path"] = str(report_path)
-                    drift_results["drift_detected"] = report.as_dict()["metrics"][0].get("result", {}).get("dataset_drift", None)
+                    drift_results["drift_detected"] = _extract_dataset_drift(report)
                 except Exception as e:
                     logger.exception("Evidently report rendering failed")
                     drift_results["warning"] = f"Evidently report rendering failed: {e}"

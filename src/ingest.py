@@ -25,52 +25,60 @@ def compute_file_hash(file_path: Path, algorithm: str = "sha256") -> str:
     return hash_obj.hexdigest()
 
 
-def _ingest_csv(src: Path, dest_dir: Path) -> dict[str, Any]:
-    """Copy a single CSV file into dest_dir and return its manifest entry.
+def _copy_and_hash(src: Path, dest_dir: Path, algorithm: str = "sha256") -> tuple[int, str]:
+    """Copy src into dest_dir and hash it in a single read pass.
+
+    Hashing via compute_file_hash() and then copying via shutil.copy2() would
+    each read the whole file independently — for a large source (e.g.
+    HCAHPS-Hospital.csv at ~141MB) that's twice the necessary read I/O. This
+    streams the file once, hashing each chunk as it's written to the
+    destination, then copies stat metadata (mtime, permissions) to match
+    copy2's behavior.
 
     Args:
-        src: Source CSV file path
-        dest_dir: Destination directory (versioned raw run dir)
+        src: Source file path.
+        dest_dir: Destination directory (versioned raw run dir).
+        algorithm: Hash algorithm.
 
     Returns:
-        Manifest entry dict with size, hash, format, and timestamp
+        (file_size_bytes, hex_digest).
     """
-    file_hash = compute_file_hash(src)
-    file_size = src.stat().st_size
-    shutil.copy2(src, dest_dir / src.name)
+    hash_obj = hashlib.new(algorithm)
+    dest = dest_dir / src.name
+    size = 0
+    with open(src, "rb") as fsrc, open(dest, "wb") as fdst:
+        for chunk in iter(lambda: fsrc.read(8192), b""):
+            hash_obj.update(chunk)
+            fdst.write(chunk)
+            size += len(chunk)
+    shutil.copystat(src, dest)
+    return size, hash_obj.hexdigest()
+
+
+def _ingest_file(src: Path, dest_dir: Path, fmt: str) -> dict[str, Any]:
+    """Copy and hash a single file into dest_dir, returning its manifest entry.
+
+    Args:
+        src: Source file path.
+        dest_dir: Destination directory (versioned raw run dir).
+        fmt: Format label recorded in the manifest (e.g. "csv", "parquet").
+
+    Returns:
+        Manifest entry dict with size, hash, format, and timestamp.
+    """
+    file_size, file_hash = _copy_and_hash(src, dest_dir)
     return {
         "size_bytes": file_size,
         "hash_sha256": file_hash,
-        "format": "csv",
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-    }
-
-
-def _ingest_parquet(src: Path, dest_dir: Path) -> dict[str, Any]:
-    """Copy a single Parquet file into dest_dir and return its manifest entry.
-
-    Args:
-        src: Source Parquet file path
-        dest_dir: Destination directory (versioned raw run dir)
-
-    Returns:
-        Manifest entry dict with size, hash, format, and timestamp
-    """
-    file_hash = compute_file_hash(src)
-    file_size = src.stat().st_size
-    shutil.copy2(src, dest_dir / src.name)
-    return {
-        "size_bytes": file_size,
-        "hash_sha256": file_hash,
-        "format": "parquet",
+        "format": fmt,
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
 
 
 # Maps file extension → handler. Register new formats here without touching ingest_files.
 HANDLERS: dict[str, Callable[[Path, Path], dict[str, Any]]] = {
-    ".csv": _ingest_csv,
-    ".parquet": _ingest_parquet,
+    ".csv": lambda src, dest_dir: _ingest_file(src, dest_dir, "csv"),
+    ".parquet": lambda src, dest_dir: _ingest_file(src, dest_dir, "parquet"),
 }
 
 

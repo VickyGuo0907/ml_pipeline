@@ -74,6 +74,16 @@ drop_columns:
   - "Number of Readmissions"
   - "Predicted Readmission Rate"
   - "Expected Readmission Rate"
+  # READM group counts (Hospital_General_Information) are CMS's own better/worse/no-different
+  # flags computed across the same six HRRP measure families (incl. pneumonia), same 36-month
+  # collection window as HRRP. Verified empirically: these correlate with the *contemporaneous*
+  # 2024 PN ratio (r=0.44/-0.35) almost as strongly as with the 2025 target (r=0.39/-0.34) —
+  # they're a proxy for the hospital's own readmission performance, not an independent signal.
+  # Same exclusion class as Number/Predicted/Expected Readmission Rate above.
+  - "Count of Facility READM Measures"
+  - "Count of READM Measures Better"
+  - "Count of READM Measures No Different"
+  - "Count of READM Measures Worse"
 
 scale: true
 # EDA found Number of Discharges heavily right-skewed (skew 2.76, kurtosis 16.6) — a

@@ -28,7 +28,7 @@ from src.monitoring import generate_drift_report  # noqa: E402
 from src.profile import profile_raw_files  # noqa: E402
 from src.train import train_models  # noqa: E402
 from src.utils.config import OrchestrationConfig, discover_pipelines, load_pipeline_config, load_pipeline_orchestration_config  # noqa: E402
-from src.utils.io import find_previous_run_id  # noqa: E402
+from src.utils.io import find_previous_run_id, resolve_run_path  # noqa: E402
 from src.validate import validate_raw_files  # noqa: E402
 
 import pandas as pd  # noqa: E402
@@ -132,7 +132,7 @@ def build_dag(config: OrchestrationConfig) -> DAG:
     def validate_features_wrapper(**context) -> dict:
         """Validate feature matrix: target column type, all-numeric, minimum row count."""
         run_id = _pull_run_id(context)
-        train_df = pd.read_parquet(f"{config.directories.features}/{run_id}/train.parquet")
+        train_df = pd.read_parquet(resolve_run_path(config.directories.features, run_id) / "train.parquet")
 
         pipeline_cfg = load_pipeline_config(config.directories.config)
         target_col = pipeline_cfg.target.name

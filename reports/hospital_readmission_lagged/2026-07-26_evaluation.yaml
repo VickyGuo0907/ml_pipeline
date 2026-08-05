@@ -1,49 +1,49 @@
 run_id: '2026-07-26'
-evaluated_at: '2026-07-26T16:51:25.327267+00:00'
+evaluated_at: '2026-08-02T19:44:47.831674+00:00'
 thresholds:
   min_test_r2: 0.0
   max_test_rmse: 0.12
 models:
-  elastic_net:
+  hospital_readmission_lagged_elastic_net:
     status: registered
-    version: '23'
-    test_r2: 0.22022101516020132
-    train_r2: 0.22157529881402294
-    test_rmse: 0.05897174020683913
-    train_rmse: 0.05571177987928754
+    version: '1'
+    test_r2: 0.046122683544701726
+    train_r2: 0.09084102913858894
+    test_rmse: 0.06522355118927832
+    train_rmse: 0.06020861587180433
     test_rmse_ci:
-    - 0.05534353836638954
-    - 0.06256063681093338
+    - 0.06124355167187985
+    - 0.06941974180097178
     test_r2_ci:
-    - 0.16620435975041417
-    - 0.2706546042214095
+    - 0.01921000871813086
+    - 0.06763597369533114
     drift_detected: true
-  random_forest:
+  hospital_readmission_lagged_random_forest:
     status: registered
-    version: '23'
-    test_r2: 0.1776877063886353
-    train_r2: 0.8851362076388245
-    test_rmse: 0.060558703919237504
-    train_rmse: 0.02140081460112502
+    version: '1'
+    test_r2: 0.04927167291065737
+    train_r2: 0.8712596103832879
+    test_rmse: 0.06511580250108687
+    train_rmse: 0.022656673112902995
     test_rmse_ci:
-    - 0.05683506806648747
-    - 0.06420088092903867
+    - 0.06112001915569221
+    - 0.069173004638144
     test_r2_ci:
-    - 0.12629279005702448
-    - 0.22788209888561706
+    - 0.004392470610041904
+    - 0.0881343100774328
     drift_detected: true
-  lightgbm_gbm:
+  hospital_readmission_lagged_lightgbm_gbm:
     status: registered
-    version: '23'
-    test_r2: 0.19490048359094048
-    train_r2: 0.663979825074049
-    test_rmse: 0.05992153956509263
-    train_rmse: 0.0366033981599674
+    version: '1'
+    test_r2: 0.06949679823895116
+    train_r2: 0.6123277440175185
+    test_rmse: 0.06441946536899557
+    train_rmse: 0.039316159654553574
     test_rmse_ci:
-    - 0.056237750772244174
-    - 0.06352611259228566
+    - 0.06048793520989413
+    - 0.06859760564119952
     test_r2_ci:
-    - 0.11627184306372589
-    - 0.26118692366813184
+    - 0.008155235350176327
+    - 0.126602421878556
     drift_detected: true
-run_champion: elastic_net
+run_champion: hospital_readmission_lagged_lightgbm_gbm

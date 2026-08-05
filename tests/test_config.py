@@ -77,16 +77,20 @@ def test_load_features_config():
 
 
 def test_load_models_config():
-    """Test loading and validating the biomedical_clinical models configuration."""
+    """Test loading and validating the biomedical_clinical models configuration.
+
+    Model names are pipeline-prefixed (e.g. "biomedical_clinical_elastic_net") to
+    keep MLflow's shared registry namespace collision-free across pipelines.
+    """
     config = load_models_config(BIOMEDICAL_CONFIG)
     assert isinstance(config, ModelsConfig)
     model_names = [m.name for m in config.models]
-    assert "ols_baseline" in model_names
-    assert "elastic_net" in model_names
-    assert "ridge_l2" in model_names
-    assert "lasso_l1" in model_names
-    assert "random_forest" in model_names
-    assert "lightgbm_gbm" in model_names
+    assert "biomedical_clinical_ols_baseline" in model_names
+    assert "biomedical_clinical_elastic_net" in model_names
+    assert "biomedical_clinical_ridge_l2" in model_names
+    assert "biomedical_clinical_lasso_l1" in model_names
+    assert "biomedical_clinical_random_forest" in model_names
+    assert "biomedical_clinical_lightgbm_gbm" in model_names
     assert config.random_state == 42
 
 
@@ -284,11 +288,16 @@ def test_load_hospital_readmission_lagged_cleaning_config():
 
 
 def test_load_hospital_readmission_lagged_models_config():
-    """Test the lagged pipeline's model ladder matches the capstone validation plan (2+ supervised)."""
+    """Test the lagged pipeline's model ladder matches the capstone validation plan (2+ supervised).
+
+    Model names are pipeline-prefixed to keep MLflow's shared registry namespace
+    collision-free — this pipeline's "elastic_net" would otherwise register as a
+    version of the SAME MLflow model as biomedical_clinical's "elastic_net".
+    """
     config = load_models_config(LAGGED_CONFIG)
     model_names = [m.name for m in config.models]
-    assert "elastic_net" in model_names
-    assert "lightgbm_gbm" in model_names
+    assert "hospital_readmission_lagged_elastic_net" in model_names
+    assert "hospital_readmission_lagged_lightgbm_gbm" in model_names
     assert len(model_names) >= 2
 
 

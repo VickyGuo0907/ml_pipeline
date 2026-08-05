@@ -1,0 +1,91 @@
+run_id: '2026-07-26'
+evaluated_at: '2026-08-02T18:44:40.934272+00:00'
+thresholds:
+  min_test_r2: 0.0
+  max_test_rmse: 0.1
+models:
+  biomedical_clinical_ols_baseline:
+    status: registered
+    version: '1'
+    test_r2: 0.025344662946236163
+    train_r2: 0.0477205915311979
+    test_rmse: 0.05341778574453971
+    train_rmse: 0.055179791239778286
+    test_rmse_ci:
+    - 0.04965316290924087
+    - 0.05710041282873385
+    test_r2_ci:
+    - -0.01426712534916974
+    - 0.05767080296106492
+    drift_detected: false
+  biomedical_clinical_elastic_net:
+    status: registered
+    version: '1'
+    test_r2: 0.020860882690015736
+    train_r2: 0.02903436311807861
+    test_rmse: 0.053540515684363445
+    train_rmse: 0.055718547494836186
+    test_rmse_ci:
+    - 0.04960154847564796
+    - 0.05738448325501169
+    test_r2_ci:
+    - -0.0042139970130951575
+    - 0.037689867190038716
+    drift_detected: false
+  biomedical_clinical_ridge_l2:
+    status: registered
+    version: '1'
+    test_r2: 0.025464666099693
+    train_r2: 0.04772022335273085
+    test_rmse: 0.053414497146086766
+    train_rmse: 0.055179801906820335
+    test_rmse_ci:
+    - 0.049649778874509276
+    - 0.0570966612201889
+    test_r2_ci:
+    - -0.014154195486409936
+    - 0.05775744409055416
+    drift_detected: false
+  biomedical_clinical_lasso_l1:
+    status: registered
+    version: '1'
+    test_r2: 0.03262565359728242
+    train_r2: 0.04174714281301606
+    test_rmse: 0.05321788764925187
+    train_rmse: 0.05535258630700967
+    test_rmse_ci:
+    - 0.0494425533964208
+    - 0.05701284484870831
+    test_r2_ci:
+    - -0.0019635621964622036
+    - 0.06024874993692065
+    drift_detected: false
+  biomedical_clinical_random_forest:
+    status: registered
+    version: '1'
+    test_r2: 0.005706284211381862
+    train_r2: 0.8405061428055496
+    test_rmse: 0.053953260676162504
+    train_rmse: 0.022582386540587234
+    test_rmse_ci:
+    - 0.05033014077601953
+    - 0.057473599203096686
+    test_r2_ci:
+    - -0.05946433310078269
+    - 0.058060802427243124
+    drift_detected: false
+  biomedical_clinical_lightgbm_gbm:
+    status: registered
+    version: '1'
+    test_r2: 0.0400270620305081
+    train_r2: 0.3180072609782799
+    test_rmse: 0.05301391096188724
+    train_rmse: 0.046696865714832586
+    test_rmse_ci:
+    - 0.04939282756387616
+    - 0.056460283951789356
+    test_r2_ci:
+    - -0.01438021887855997
+    - 0.08717868905934792
+    drift_detected: false
+run_champion: biomedical_clinical_lightgbm_gbm

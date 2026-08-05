@@ -1,17 +1,28 @@
-"""FastAPI serving endpoint for ML model predictions.
+"""FastAPI serving endpoint for ML model predictions — pipeline-agnostic.
+
+The request schema is not hardcoded: it is derived at load time from the served
+model's own training run. src/train.py logs each run's exact feature column list
+(feature_columns.json artifact) and target column name (target_col param), so this
+module works unmodified for any pipeline's model — the feature set, feature count,
+and target name all come from MLflow, never from code here.
 
 Model loading order:
   1. Try Production stage for the configured model name
   2. Fall back to Staging (useful during development before manual promotion)
 
-Predictions are inverse Box-Cox transformed back to the original
-Excess Readmission Ratio scale using the lambda logged during training.
+Predictions are inverse Box-Cox transformed back to the model's original target
+scale using the lambda logged during training, when that pipeline used Box-Cox.
 
 Environment variables:
   MLFLOW_TRACKING_URI  — MLflow server (default: http://mlflow-server:5000)
-  SERVING_MODEL_NAME   — which registered model to serve (default: lightgbm_gbm)
+  SERVING_MODEL_NAME   — which registered model to serve. Must be a full
+                         pipeline-qualified name from that pipeline's models.yaml
+                         (e.g. "hospital_readmission_lagged_lightgbm_gbm") — model
+                         names are prefixed per pipeline to keep MLflow's shared
+                         registry namespace collision-free.
 """
 import logging
+import math
 import os
 from contextlib import asynccontextmanager
 from typing import Any, Optional
@@ -20,47 +31,42 @@ import mlflow
 import mlflow.pyfunc
 import pandas as pd
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, Field, RootModel
 
 logger = logging.getLogger(__name__)
 
 MLFLOW_TRACKING_URI = os.environ.get("MLFLOW_TRACKING_URI", "http://mlflow-server:5000")
-SERVING_MODEL_NAME = os.environ.get("SERVING_MODEL_NAME", "lightgbm_gbm")
+SERVING_MODEL_NAME = os.environ.get("SERVING_MODEL_NAME", "hospital_readmission_lagged_lightgbm_gbm")
 
-# Actual feature column names as produced by the feature engineering stage.
-# Order must match the training feature matrix (X_train column order).
-_FEATURE_COLUMNS = [
-    "State",
-    "Care transition",
-    "Cleanliness",
-    "Communication about medicines",
-    "Discharge information",
-    "Doctor communication",
-    "Nurse communication",
-    "Overall hospital rating",
-    "Quietness",
-    "Recommend hospital",
-    "Staff responsiveness",
-]
+FEATURE_COLUMNS_ARTIFACT = "feature_columns.json"
 
-# Global model cache — populated on startup
+# Global model cache — populated on startup. feature_columns and target_col come
+# from the served model's own training run, not from any hardcoded schema here.
 _model_cache: dict[str, Any] = {
     "model": None,
     "model_name": None,
     "model_version": None,
     "model_stage": None,
     "boxcox_lambda": None,
+    "feature_columns": None,
+    "target_col": None,
 }
 
 
 def _load_model(model_name: str) -> dict[str, Any] | None:
     """Load model from MLflow registry, trying Production then Staging.
 
+    Also fetches the exact feature column list (feature_columns.json artifact) and
+    target column name (target_col param) logged by src/train.py for this model's
+    source run — this is what lets /predict validate and order input dynamically
+    for whichever pipeline trained this model, without any hardcoded schema.
+
     Args:
         model_name: Registered model name (from SERVING_MODEL_NAME env var).
 
     Returns:
-        Dict with model, version, stage, and boxcox_lambda — or None if not found.
+        Dict with model, version, stage, boxcox_lambda, feature_columns, and
+        target_col — or None if no Production/Staging version was found.
     """
     mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
     client = mlflow.tracking.MlflowClient(tracking_uri=MLFLOW_TRACKING_URI)
@@ -74,20 +80,33 @@ def _load_model(model_name: str) -> dict[str, Any] | None:
             version = versions[0]
             model_uri = f"models:/{model_name}/{stage}"
             model = mlflow.pyfunc.load_model(model_uri)
+            run = client.get_run(version.run_id)
 
-            # Retrieve Box-Cox lambda logged by train.py for inverse transform
             boxcox_lambda: float | None = None
+            lambda_str = run.data.params.get("boxcox_lambda")
+            if lambda_str is not None:
+                boxcox_lambda = float(lambda_str)
+
+            target_col = run.data.params.get("target_col")
+
+            feature_columns: list[str] | None = None
             try:
-                run = client.get_run(version.run_id)
-                lambda_str = run.data.params.get("boxcox_lambda")
-                if lambda_str is not None:
-                    boxcox_lambda = float(lambda_str)
+                local_path = client.download_artifacts(version.run_id, FEATURE_COLUMNS_ARTIFACT)
+                import json
+                with open(local_path) as f:
+                    feature_columns = json.load(f)["columns"]
             except Exception as e:
-                logger.warning("Could not retrieve boxcox_lambda from run: %s", e)
+                logger.warning(
+                    "No %s artifact for %s v%s (run %s) — model was likely trained "
+                    "before serving metadata was added. Retrain to enable /predict. "
+                    "Underlying error: %s",
+                    FEATURE_COLUMNS_ARTIFACT, model_name, version.version, version.run_id, e,
+                )
 
             logger.info(
-                "Loaded %s v%s from %s (boxcox_lambda=%s)",
-                model_name, version.version, stage, boxcox_lambda,
+                "Loaded %s v%s from %s (target_col=%s, %s features, boxcox_lambda=%s)",
+                model_name, version.version, stage, target_col,
+                len(feature_columns) if feature_columns else "unknown", boxcox_lambda,
             )
             return {
                 "model": model,
@@ -95,6 +114,8 @@ def _load_model(model_name: str) -> dict[str, Any] | None:
                 "model_version": version.version,
                 "model_stage": stage,
                 "boxcox_lambda": boxcox_lambda,
+                "feature_columns": feature_columns,
+                "target_col": target_col,
             }
         except Exception as e:
             logger.debug("No %s model for %s: %s", stage, model_name, e)
@@ -105,17 +126,16 @@ def _load_model(model_name: str) -> dict[str, Any] | None:
 
 
 def _inverse_boxcox(value: float, lam: float) -> float:
-    """Inverse Box-Cox transform to return prediction to original ERR scale.
+    """Inverse Box-Cox transform to return a prediction to its original target scale.
 
     Args:
         value: Box-Cox transformed prediction.
         lam: Box-Cox lambda used during feature engineering.
 
     Returns:
-        Prediction in original Excess Readmission Ratio scale (clamped to ≥ 0).
+        Prediction in the original target scale (clamped to ≥ 0).
     """
     if lam == 0:
-        import math
         return math.exp(value)
     return max(0.0, (value * lam + 1) ** (1.0 / lam))
 
@@ -133,11 +153,10 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="ML Pipeline Prediction Server",
     description=(
-        "Serves the hospital readmission prediction model from MLflow. "
-        "Feature inputs must be StandardScaler-normalized (z-scores) as produced "
-        "by the pipeline's feature engineering stage. "
-        "Predictions are returned in original Excess Readmission Ratio scale "
-        "via inverse Box-Cox transform."
+        "Serves a registered MLflow model from any pipeline in this project. "
+        "The required input features, their count, and the predicted target all "
+        "depend on which model SERVING_MODEL_NAME points at — call GET /schema "
+        "after startup to see exactly what this deployment expects and predicts."
     ),
     lifespan=lifespan,
 )
@@ -151,44 +170,25 @@ class HealthResponse(BaseModel):
     model_name: Optional[str] = None
     model_version: Optional[str] = None
     model_stage: Optional[str] = None
+    target_col: Optional[str] = None
 
 
-class PredictionInput(BaseModel):
-    """Scaled HCAHPS feature inputs (StandardScaler z-scores from feature engineering).
+class SchemaResponse(BaseModel):
+    """Describes the input/output contract of the currently loaded model."""
 
-    All values are z-scores (mean=0, std=1) as output by the pipeline's
-    StandardScaler. Positive = above average, negative = below average.
-    """
+    model_name: Optional[str] = None
+    model_version: Optional[str] = None
+    target_col: Optional[str] = None
+    required_features: Optional[list[str]] = None
+    boxcox_applied: bool = False
 
-    model_config = ConfigDict(
-        json_schema_extra={
-            "example": {
-                "state": 0.5,
-                "care_transition": -0.3,
-                "cleanliness": 0.8,
-                "communication_about_medicines": 0.2,
-                "discharge_information": -0.1,
-                "doctor_communication": 0.6,
-                "nurse_communication": 0.4,
-                "overall_hospital_rating": -0.2,
-                "quietness": 0.1,
-                "recommend_hospital": 0.3,
-                "staff_responsiveness": -0.5,
-            }
-        }
-    )
 
-    state: float = Field(..., description="State (frequency-encoded, then z-scored)")
-    care_transition: float = Field(..., description="Care transition score (z-score)")
-    cleanliness: float = Field(..., description="Cleanliness score (z-score)")
-    communication_about_medicines: float = Field(..., description="Communication about medicines (z-score)")
-    discharge_information: float = Field(..., description="Discharge information score (z-score)")
-    doctor_communication: float = Field(..., description="Doctor communication score (z-score)")
-    nurse_communication: float = Field(..., description="Nurse communication score (z-score)")
-    overall_hospital_rating: float = Field(..., description="Overall hospital rating (z-score)")
-    quietness: float = Field(..., description="Quietness score (z-score)")
-    recommend_hospital: float = Field(..., description="Recommend hospital score (z-score)")
-    staff_responsiveness: float = Field(..., description="Staff responsiveness score (z-score)")
+# Prediction input is an arbitrary {feature_name: value} object rather than a fixed
+# set of Pydantic fields — the feature set is only known once a model is loaded
+# (see _model_cache["feature_columns"]), and differs per pipeline. Required-field
+# validation happens in predict() below, against that model's own trained schema.
+class PredictionInput(RootModel[dict[str, float]]):
+    """Feature values keyed by their exact trained column name (see GET /schema)."""
 
 
 class PredictionOutput(BaseModel):
@@ -196,12 +196,13 @@ class PredictionOutput(BaseModel):
 
     prediction: float = Field(
         ...,
-        description="Excess Readmission Ratio (original scale, inverse Box-Cox applied)",
+        description="Prediction in the original target scale (inverse Box-Cox applied if used)",
     )
     prediction_transformed: Optional[float] = Field(
         None,
         description="Raw model output in Box-Cox space (omitted if no lambda available)",
     )
+    target_col: Optional[str] = Field(None, description="Name of the target this model predicts")
     model_name: str
     model_version: str
     model_stage: str
@@ -209,19 +210,41 @@ class PredictionOutput(BaseModel):
 
 @app.get("/health", response_model=HealthResponse)
 async def health() -> HealthResponse:
-    """Health check — reports model name, version, and stage."""
+    """Health check — reports model name, version, stage, and predicted target."""
     return HealthResponse(
         status="healthy",
         model_loaded=_model_cache.get("model") is not None,
         model_name=_model_cache.get("model_name"),
         model_version=_model_cache.get("model_version"),
         model_stage=_model_cache.get("model_stage"),
+        target_col=_model_cache.get("target_col"),
+    )
+
+
+@app.get("/schema", response_model=SchemaResponse)
+async def schema() -> SchemaResponse:
+    """Report the currently loaded model's required input features and target.
+
+    Call this before /predict — the required feature set depends entirely on
+    which model SERVING_MODEL_NAME points at.
+    """
+    return SchemaResponse(
+        model_name=_model_cache.get("model_name"),
+        model_version=_model_cache.get("model_version"),
+        target_col=_model_cache.get("target_col"),
+        required_features=_model_cache.get("feature_columns"),
+        boxcox_applied=_model_cache.get("boxcox_lambda") is not None,
     )
 
 
 @app.post("/predict", response_model=PredictionOutput)
 async def predict(data: PredictionInput) -> PredictionOutput:
-    """Predict Excess Readmission Ratio from scaled HCAHPS features."""
+    """Predict using whichever model SERVING_MODEL_NAME points at.
+
+    Request body is a flat JSON object of {feature_name: value}, using the exact
+    column names reported by GET /schema. Extra/unknown keys are ignored; missing
+    required keys return 422.
+    """
     if _model_cache.get("model") is None:
         raise HTTPException(
             status_code=503,
@@ -231,39 +254,45 @@ async def predict(data: PredictionInput) -> PredictionOutput:
             ),
         )
 
+    feature_columns = _model_cache.get("feature_columns")
+    if not feature_columns:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                f"Model '{SERVING_MODEL_NAME}' has no recorded feature schema "
+                f"(missing {FEATURE_COLUMNS_ARTIFACT} artifact) — it was likely "
+                "trained before serving metadata was added. Retrain to enable /predict."
+            ),
+        )
+
+    payload = data.root
+    missing = [c for c in feature_columns if c not in payload]
+    if missing:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Missing required feature(s): {missing}. See GET /schema for the full list.",
+        )
+
     try:
-        # Map snake_case API fields → actual pipeline column names (spaces preserved)
-        feature_values = {
-            "State": data.state,
-            "Care transition": data.care_transition,
-            "Cleanliness": data.cleanliness,
-            "Communication about medicines": data.communication_about_medicines,
-            "Discharge information": data.discharge_information,
-            "Doctor communication": data.doctor_communication,
-            "Nurse communication": data.nurse_communication,
-            "Overall hospital rating": data.overall_hospital_rating,
-            "Quietness": data.quietness,
-            "Recommend hospital": data.recommend_hospital,
-            "Staff responsiveness": data.staff_responsiveness,
-        }
-        input_df = pd.DataFrame([feature_values], columns=_FEATURE_COLUMNS)
+        input_df = pd.DataFrame([{c: payload[c] for c in feature_columns}], columns=feature_columns)
         raw_prediction = float(_model_cache["model"].predict(input_df)[0])
 
-        # Inverse Box-Cox to return prediction in original ERR scale
         boxcox_lambda = _model_cache.get("boxcox_lambda")
         if boxcox_lambda is not None:
             prediction_original = _inverse_boxcox(raw_prediction, boxcox_lambda)
         else:
-            logger.warning("boxcox_lambda not available — returning raw prediction as-is")
             prediction_original = raw_prediction
 
         return PredictionOutput(
             prediction=prediction_original,
             prediction_transformed=raw_prediction if boxcox_lambda is not None else None,
+            target_col=_model_cache.get("target_col"),
             model_name=_model_cache["model_name"],
             model_version=str(_model_cache["model_version"]),
             model_stage=_model_cache["model_stage"],
         )
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error("Prediction failed: %s", e)
         raise HTTPException(status_code=500, detail=f"Prediction failed: {str(e)}")

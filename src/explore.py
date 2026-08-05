@@ -16,6 +16,7 @@ from sklearn.metrics import silhouette_score
 from sklearn.preprocessing import StandardScaler
 
 from src.utils.config import load_pipeline_config
+from src.utils.io import resolve_run_path
 
 logger = logging.getLogger(__name__)
 
@@ -138,7 +139,7 @@ def run_unsupervised_analysis(
     Raises:
         FileNotFoundError: If train.parquet is missing.
     """
-    train_path = Path(features_dir) / run_id / "train.parquet"
+    train_path = resolve_run_path(features_dir, run_id) / "train.parquet"
     if not train_path.exists():
         raise FileNotFoundError(f"Train features not found: {train_path}")
 

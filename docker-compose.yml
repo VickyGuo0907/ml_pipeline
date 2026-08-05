@@ -198,15 +198,30 @@ services:
         condition: service_healthy
     environment:
       MLFLOW_TRACKING_URI: http://mlflow-server:5000
+      # Previously undeclared here — SERVING_MODEL_NAME in .env had no effect on the
+      # container regardless of its value, since docker-compose only passes through
+      # host env vars a service's `environment:` block explicitly lists.
+      SERVING_MODEL_NAME: ${SERVING_MODEL_NAME:-hospital_readmission_lagged_lightgbm_gbm}
     ports:
       - "8000:8000"
     volumes:
       - ${PWD}/src:/app/src
       - ${PWD}/config:/app/config
-      - ${PWD}/mlflow-artifacts:/app/mlflow-artifacts:ro
+      # Must mount at the same absolute path mlflow-server and airflow-scheduler use
+      # (/mlflow-artifacts). MLflow's local-filesystem artifact store resolves model
+      # artifact URIs as bare absolute paths, read directly off disk by the client —
+      # it does not proxy every read through the tracking server's HTTP API. A mount
+      # at any other path (e.g. /app/mlflow-artifacts) leaves those paths unreadable
+      # here even though the tracking server reports the run/model as fully logged.
+      # Writable (not :ro): loading a registered model version via models:/name/stage
+      # makes the local ModelsArtifactRepo client write a small registered_model_meta
+      # bookkeeping file into the same artifact dir — mounting read-only makes every
+      # load fail with "Read-only file system", not just the ones that use it.
+      - ${PWD}/mlflow-artifacts:/mlflow-artifacts
     working_dir: /app
     command: >
-      bash -c "pip install -q uvicorn fastapi requests pydantic mlflow pandas scikit-learn lightgbm &&
+      bash -c "apt-get update -qq && apt-get install -y -qq --no-install-recommends libgomp1 curl &&
+      pip install -q uvicorn fastapi requests pydantic mlflow pandas scikit-learn lightgbm &&
       python -m uvicorn src.serve:app --host 0.0.0.0 --port 8000"
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:8000/health || exit 1"]

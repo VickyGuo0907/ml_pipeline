@@ -1,0 +1,49 @@
+run_id: '2026-08-02'
+evaluated_at: '2026-08-02T20:36:38.237530+00:00'
+thresholds:
+  min_test_r2: 0.0
+  max_test_rmse: 0.12
+models:
+  hospital_readmission_lagged_elastic_net:
+    status: registered
+    version: '2'
+    test_r2: 0.046122683544701726
+    train_r2: 0.09084102913858894
+    test_rmse: 0.06522355118927832
+    train_rmse: 0.06020861587180433
+    test_rmse_ci:
+    - 0.06124355167187985
+    - 0.06941974180097178
+    test_r2_ci:
+    - 0.01921000871813086
+    - 0.06763597369533114
+    drift_detected: false
+  hospital_readmission_lagged_random_forest:
+    status: registered
+    version: '3'
+    test_r2: 0.04643834604088026
+    train_r2: 0.8704882725116618
+    test_rmse: 0.06521275822238874
+    train_rmse: 0.022724444585982308
+    test_rmse_ci:
+    - 0.0612467731532266
+    - 0.06926717425866358
+    test_r2_ci:
+    - 0.0017245203383635585
+    - 0.08613687659554901
+    drift_detected: false
+  hospital_readmission_lagged_lightgbm_gbm:
+    status: registered
+    version: '3'
+    test_r2: 0.06949679823895116
+    train_r2: 0.6123277440175185
+    test_rmse: 0.06441946536899557
+    train_rmse: 0.039316159654553574
+    test_rmse_ci:
+    - 0.06048793520989413
+    - 0.06859760564119952
+    test_r2_ci:
+    - 0.008155235350176327
+    - 0.126602421878556
+    drift_detected: false
+run_champion: hospital_readmission_lagged_lightgbm_gbm

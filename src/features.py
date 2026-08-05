@@ -52,6 +52,24 @@ def _encode_columns(df: pd.DataFrame, encoding_map: dict[str, str]) -> pd.DataFr
     return df
 
 
+def _dedupe_on_id(df: pd.DataFrame, id_col: str, label: str) -> pd.DataFrame:
+    """Drop rows with a duplicate id_col value, warning first. Keeps the first occurrence.
+
+    Args:
+        df: DataFrame to check.
+        id_col: Column that should be unique (the join key).
+        label: Human-readable source name for the log message (e.g. filename).
+
+    Returns:
+        df with duplicate id_col rows removed (or unchanged if none found).
+    """
+    dupes = df[id_col].duplicated().sum()
+    if dupes:
+        logger.warning("%s has %d duplicate %s — deduplicating", label, dupes, id_col)
+        df = df.drop_duplicates(subset=[id_col], keep="first")
+    return df
+
+
 def _pivot_join_sources(interim_path: Path, join_config: JoinStrategyConfig) -> pd.DataFrame:
     """Build a wide feature matrix from multiple long-format interim files.
 
@@ -90,10 +108,7 @@ def _pivot_join_sources(interim_path: Path, join_config: JoinStrategyConfig) -> 
         if spine_cfg and spine_cfg.file_pattern in f.name:
             if spine_cfg.measure_column and spine_cfg.measure_value:
                 df = df[df[spine_cfg.measure_column] == spine_cfg.measure_value].copy()
-            dupes = df[id_col].duplicated().sum()
-            if dupes:
-                logger.warning("Spine '%s' has %d duplicate %s — deduplicating", f.name, dupes, id_col)
-                df = df.drop_duplicates(subset=[id_col], keep="first")
+            df = _dedupe_on_id(df, id_col, f"Spine '{f.name}'")
             spine_df = df
             logger.info("Spine loaded from %s: %d rows × %d cols", f.name, len(df), len(df.columns))
             continue
@@ -126,12 +141,7 @@ def _pivot_join_sources(interim_path: Path, join_config: JoinStrategyConfig) -> 
 
         for direct_cfg in join_config.direct_joins:
             if direct_cfg.file_pattern in f.name:
-                dupes = df[id_col].duplicated().sum()
-                if dupes:
-                    logger.warning(
-                        "Direct-join '%s' has %d duplicate %s — deduplicating", f.name, dupes, id_col
-                    )
-                    df = df.drop_duplicates(subset=[id_col], keep="first")
+                df = _dedupe_on_id(df, id_col, f"Direct-join '{f.name}'")
                 logger.info("Direct-join '%s' loaded: %d rows × %d cols", f.name, len(df), len(df.columns))
                 side_dfs.append(df)
                 break
@@ -238,10 +248,9 @@ def engineer_features(
     df = _apply_nzv_filter(df, features_config.nzv_threshold, exclude_cols=[target_col])
 
     # Replace inf with NaN, then fill NaN with column median
-    for col in df.select_dtypes(include="number").columns:
-        df[col] = df[col].replace([np.inf, -np.inf], np.nan)
-        if df[col].isna().any():
-            df[col] = df[col].fillna(df[col].median())
+    numeric_cols = df.select_dtypes(include="number").columns
+    df[numeric_cols] = df[numeric_cols].replace([np.inf, -np.inf], np.nan)
+    df[numeric_cols] = df[numeric_cols].fillna(df[numeric_cols].median())
 
     # Drop columns that are still all-NaN (median was NaN, fill did nothing)
     all_nan_cols = [

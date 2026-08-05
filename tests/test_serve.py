@@ -1,9 +1,17 @@
-"""Tests for FastAPI serving endpoint."""
+"""Tests for the pipeline-agnostic FastAPI serving endpoint.
+
+The served model's feature schema and target name are not hardcoded — they come
+from _model_cache["feature_columns"]/["target_col"], populated at load time from
+that model's own MLflow training run. Tests exercise two distinct simulated
+schemas (a small 3-feature set and a larger 6-feature set with different names)
+to prove the endpoint genuinely adapts, rather than happening to match one
+hardcoded pipeline's shape.
+"""
 import pytest
 from fastapi.testclient import TestClient
 from unittest.mock import MagicMock
 
-from src.serve import app, PredictionInput, _model_cache
+from src.serve import app, _model_cache
 
 
 @pytest.fixture
@@ -20,117 +28,162 @@ def mock_model():
     return model
 
 
+@pytest.fixture(autouse=True)
+def reset_model_cache():
+    """Ensure no state leaks between tests — each test sets up its own cache."""
+    _model_cache.update({
+        "model": None, "model_name": None, "model_version": None, "model_stage": None,
+        "boxcox_lambda": None, "feature_columns": None, "target_col": None,
+    })
+    yield
+    _model_cache.update({
+        "model": None, "model_name": None, "model_version": None, "model_stage": None,
+        "boxcox_lambda": None, "feature_columns": None, "target_col": None,
+    })
+
+
+# Two distinct schemas to prove genericity — neither is hardcoded into src/serve.py.
+SMALL_SCHEMA = ["State", "Nurse communication", "Overall hospital rating"]
+SMALL_INPUT = {"State": 0.5, "Nurse communication": -0.3, "Overall hospital rating": 0.8}
+
+WIDE_SCHEMA = ["mspb_1_spending", "hai_1_sir", "hai_2_sir", "overall_star_rating", "tec_imm3_flu_vaccination", "ownership_type"]
+WIDE_INPUT = {
+    "mspb_1_spending": 0.1, "hai_1_sir": -0.2, "hai_2_sir": 0.3,
+    "overall_star_rating": -0.4, "tec_imm3_flu_vaccination": 0.5, "ownership_type": -0.6,
+}
+
+
+def _load(model, model_name="test_model", version="3", stage="Production",
+          boxcox_lambda=None, feature_columns=None, target_col=None):
+    _model_cache.update({
+        "model": model, "model_name": model_name, "model_version": version, "model_stage": stage,
+        "boxcox_lambda": boxcox_lambda, "feature_columns": feature_columns, "target_col": target_col,
+    })
+
+
 class TestHealth:
     """Tests for health check endpoint."""
 
     def test_health_returns_healthy_status(self, client):
-        """Test health endpoint returns healthy status."""
         response = client.get("/health")
         assert response.status_code == 200
         assert response.json()["status"] == "healthy"
 
     def test_health_reports_model_loaded(self, client, mock_model):
-        """Test health endpoint reports model loaded status."""
-        _model_cache["model"] = mock_model
+        _load(mock_model, target_col="expression_level")
         response = client.get("/health")
         assert response.status_code == 200
         assert response.json()["model_loaded"] is True
+        assert response.json()["target_col"] == "expression_level"
 
     def test_health_reports_model_not_loaded(self, client):
-        """Test health endpoint reports when model not loaded."""
-        _model_cache["model"] = None
         response = client.get("/health")
         assert response.status_code == 200
         assert response.json()["model_loaded"] is False
+        assert response.json()["target_col"] is None
 
 
-VALID_INPUT = {
-    "state": 0.5,
-    "care_transition": -0.3,
-    "cleanliness": 0.8,
-    "communication_about_medicines": 0.2,
-    "discharge_information": -0.1,
-    "doctor_communication": 0.6,
-    "nurse_communication": 0.4,
-    "overall_hospital_rating": -0.2,
-    "quietness": 0.1,
-    "recommend_hospital": 0.3,
-    "staff_responsiveness": -0.5,
-}
+class TestSchema:
+    """Tests for the /schema introspection endpoint (replaces a static OpenAPI schema)."""
+
+    def test_schema_reports_small_pipelines_feature_set(self, client, mock_model):
+        _load(mock_model, feature_columns=SMALL_SCHEMA, target_col="Excess Readmission Ratio")
+        response = client.get("/schema")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["required_features"] == SMALL_SCHEMA
+        assert data["target_col"] == "Excess Readmission Ratio"
+
+    def test_schema_reports_a_completely_different_wider_feature_set(self, client, mock_model):
+        """Same endpoint, different model loaded — proves the schema isn't hardcoded."""
+        _load(mock_model, feature_columns=WIDE_SCHEMA, target_col="expression_level")
+        response = client.get("/schema")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["required_features"] == WIDE_SCHEMA
+        assert data["target_col"] == "expression_level"
+        assert len(data["required_features"]) == 6
+
+    def test_schema_reports_boxcox_applied_flag(self, client, mock_model):
+        _load(mock_model, feature_columns=SMALL_SCHEMA, boxcox_lambda=-0.3)
+        response = client.get("/schema")
+        assert response.json()["boxcox_applied"] is True
+
+    def test_schema_when_no_model_loaded(self, client):
+        response = client.get("/schema")
+        assert response.status_code == 200
+        assert response.json()["required_features"] is None
 
 
 class TestPredict:
-    """Tests for prediction endpoint."""
+    """Tests for the prediction endpoint against two different loaded schemas."""
 
-    def test_predict_returns_prediction_when_model_loaded(self, client, mock_model):
-        """Test predict endpoint returns prediction value."""
-        _model_cache["model"] = mock_model
-        _model_cache["model_name"] = "lightgbm_gbm"
-        _model_cache["model_version"] = "3"
-        _model_cache["model_stage"] = "Production"
-        _model_cache["boxcox_lambda"] = None
+    def test_predict_with_small_schema(self, client, mock_model):
+        _load(mock_model, model_name="model_a", feature_columns=SMALL_SCHEMA)
 
-        response = client.post("/predict", json=VALID_INPUT)
+        response = client.post("/predict", json=SMALL_INPUT)
         assert response.status_code == 200
         data = response.json()
-        assert "prediction" in data
         assert data["prediction"] == 0.95
-        assert data["model_name"] == "lightgbm_gbm"
-        assert data["model_version"] == "3"
-        assert data["model_stage"] == "Production"
+        assert data["model_name"] == "model_a"
+
+    def test_predict_with_wide_different_schema(self, client, mock_model):
+        """Same endpoint, a completely different feature set — proves genericity."""
+        _load(mock_model, model_name="model_b", feature_columns=WIDE_SCHEMA, target_col="expression_level")
+
+        response = client.post("/predict", json=WIDE_INPUT)
+        assert response.status_code == 200
+        data = response.json()
+        assert data["prediction"] == 0.95
+        assert data["model_name"] == "model_b"
+        assert data["target_col"] == "expression_level"
+
+    def test_predict_passes_features_to_model_in_trained_column_order(self, client, mock_model):
+        """Column order must match the trained order, not JSON key order, or a
+        tree/linear model would silently score the wrong feature against the
+        wrong coefficient/split."""
+        reordered_input = {k: SMALL_INPUT[k] for k in reversed(list(SMALL_INPUT))}
+        _load(mock_model, feature_columns=SMALL_SCHEMA)
+
+        client.post("/predict", json=reordered_input)
+
+        called_df = mock_model.predict.call_args[0][0]
+        assert list(called_df.columns) == SMALL_SCHEMA
 
     def test_predict_applies_inverse_boxcox(self, client, mock_model):
-        """Test predict endpoint inverse-transforms Box-Cox predictions to original ERR scale."""
-        _model_cache["model"] = mock_model
-        _model_cache["model_name"] = "lightgbm_gbm"
-        _model_cache["model_version"] = "3"
-        _model_cache["model_stage"] = "Production"
-        _model_cache["boxcox_lambda"] = -0.3
+        _load(mock_model, feature_columns=SMALL_SCHEMA, boxcox_lambda=-0.3)
 
-        response = client.post("/predict", json=VALID_INPUT)
+        response = client.post("/predict", json=SMALL_INPUT)
         assert response.status_code == 200
         data = response.json()
         assert data["prediction_transformed"] == 0.95
         assert data["prediction"] != 0.95  # inverse-transformed to original scale
 
     def test_predict_fails_when_model_not_loaded(self, client):
-        """Test predict endpoint returns 503 when model not loaded."""
-        _model_cache["model"] = None
-
-        response = client.post("/predict", json=VALID_INPUT)
+        response = client.post("/predict", json=SMALL_INPUT)
         assert response.status_code == 503
         assert "No model loaded" in response.json()["detail"]
 
+    def test_predict_fails_when_model_has_no_feature_schema(self, client, mock_model):
+        """A model registered before serving metadata was added — no feature_columns
+        artifact — must fail clearly, not crash or silently guess a schema."""
+        _load(mock_model, feature_columns=None)
+
+        response = client.post("/predict", json=SMALL_INPUT)
+        assert response.status_code == 503
+        assert "feature schema" in response.json()["detail"]
+
     def test_predict_ignores_unknown_extra_fields(self, client, mock_model):
-        """Test predict endpoint ignores fields not in the current feature schema."""
-        _model_cache["model"] = mock_model
-        _model_cache["model_name"] = "lightgbm_gbm"
-        _model_cache["model_version"] = "3"
-        _model_cache["model_stage"] = "Production"
-        _model_cache["boxcox_lambda"] = None
+        _load(mock_model, feature_columns=SMALL_SCHEMA)
 
-        input_data = {**VALID_INPUT, "some_legacy_field": 1234.0}
-
-        response = client.post("/predict", json=input_data)
+        response = client.post("/predict", json={**SMALL_INPUT, "some_legacy_field": 1234.0})
         assert response.status_code == 200
         assert response.json()["prediction"] == 0.95
 
-    def test_predict_validates_required_fields(self, client):
-        """Test predict endpoint validates required input fields."""
-        response = client.post("/predict", json={"state": 0.5})
-        assert response.status_code == 422  # Validation error
+    def test_predict_validates_required_fields_missing(self, client, mock_model):
+        _load(mock_model, feature_columns=SMALL_SCHEMA)
 
-
-class TestPredictionInput:
-    """Tests for PredictionInput model."""
-
-    def test_prediction_input_required_fields(self):
-        """Test PredictionInput requires all non-optional fields."""
-        with pytest.raises(ValueError):
-            PredictionInput(state=0.5)
-
-    def test_prediction_input_with_all_fields(self):
-        """Test PredictionInput accepts all fields."""
-        input_data = PredictionInput(**VALID_INPUT)
-        assert input_data.state == 0.5
-        assert input_data.staff_responsiveness == -0.5
+        response = client.post("/predict", json={"State": 0.5})
+        assert response.status_code == 422
+        assert "Missing required feature" in response.json()["detail"]
+        assert "Nurse communication" in response.json()["detail"]

@@ -1,4 +1,10 @@
 # TODO: define models for gene expression prediction
+#
+# Model `name` values are prefixed with the pipeline_type to keep MLflow's shared
+# registry namespace collision-free — every pipeline previously registered a model
+# named e.g. "lightgbm_gbm", so different pipelines' models were landing as versions
+# of the SAME registered model. serve.py's SERVING_MODEL_NAME must be one of these
+# full prefixed names.
 random_state: 42
 train_test_split: 0.80
 
@@ -7,12 +13,12 @@ evaluation:
   max_test_rmse: null # RMSE scale unknown until first run — disable for now
 
 models:
-  - name: ridge_baseline
+  - name: bioinfo_gene_ridge_baseline
     type: ridge
     hyperparameters:
       alpha: 1.0
 
-  - name: lightgbm_gbm
+  - name: bioinfo_gene_lightgbm_gbm
     type: gbm
     hyperparameters:
       n_estimators: 100

@@ -369,6 +369,27 @@ def load_config(config_path: str | Path) -> dict[str, Any]:
         return yaml.safe_load(f) or {}
 
 
+def _load_typed_config(config_dir: str | Path, filename: str, model_cls: type) -> Any:
+    """Load a YAML file from config_dir and validate it against a pydantic model.
+
+    Shared by every load_*_config function below — each is a required (raises
+    FileNotFoundError if missing) config file with no merge/default behavior.
+    load_orchestration_config is intentionally not built on this: it tolerates
+    a missing file by returning defaults instead of raising.
+
+    Args:
+        config_dir: Directory containing config files
+        filename: Config filename within config_dir (e.g. "pipeline.yaml")
+        model_cls: Pydantic model class to validate against
+
+    Returns:
+        Validated instance of model_cls
+    """
+    config_path = Path(config_dir) / filename
+    config_data = load_config(config_path)
+    return model_cls(**config_data)
+
+
 def load_pipeline_config(config_dir: str | Path = "config") -> PipelineConfig:
     """Load and validate pipeline configuration.
 
@@ -378,9 +399,7 @@ def load_pipeline_config(config_dir: str | Path = "config") -> PipelineConfig:
     Returns:
         Validated PipelineConfig
     """
-    config_path = Path(config_dir) / "pipeline.yaml"
-    config_data = load_config(config_path)
-    return PipelineConfig(**config_data)
+    return _load_typed_config(config_dir, "pipeline.yaml", PipelineConfig)
 
 
 def load_cleaning_config(config_dir: str | Path = "config") -> CleaningConfig:
@@ -392,9 +411,7 @@ def load_cleaning_config(config_dir: str | Path = "config") -> CleaningConfig:
     Returns:
         Validated CleaningConfig
     """
-    config_path = Path(config_dir) / "cleaning.yaml"
-    config_data = load_config(config_path)
-    return CleaningConfig(**config_data)
+    return _load_typed_config(config_dir, "cleaning.yaml", CleaningConfig)
 
 
 def load_features_config(config_dir: str | Path = "config") -> FeaturesConfig:
@@ -406,9 +423,7 @@ def load_features_config(config_dir: str | Path = "config") -> FeaturesConfig:
     Returns:
         Validated FeaturesConfig
     """
-    config_path = Path(config_dir) / "features.yaml"
-    config_data = load_config(config_path)
-    return FeaturesConfig(**config_data)
+    return _load_typed_config(config_dir, "features.yaml", FeaturesConfig)
 
 
 def load_models_config(config_dir: str | Path = "config") -> ModelsConfig:
@@ -420,9 +435,7 @@ def load_models_config(config_dir: str | Path = "config") -> ModelsConfig:
     Returns:
         Validated ModelsConfig
     """
-    config_path = Path(config_dir) / "models.yaml"
-    config_data = load_config(config_path)
-    return ModelsConfig(**config_data)
+    return _load_typed_config(config_dir, "models.yaml", ModelsConfig)
 
 
 def load_orchestration_config(config_dir: str | Path = "config") -> OrchestrationConfig:

@@ -12,6 +12,7 @@ from sklearn.metrics import r2_score
 
 from src.benchmark import bootstrap_metric_ci
 from src.utils.config import load_models_config, load_pipeline_config
+from src.utils.io import resolve_run_path
 from src.utils.model_registry import get_model
 
 logger = logging.getLogger(__name__)
@@ -76,11 +77,14 @@ def _log_metrics(
     test_rmse_ci = bootstrap_metric_ci(y_test, test_pred, _rmse)
     test_r2_ci = bootstrap_metric_ci(y_test, test_pred, r2_score)
 
+    train_mse = float(((train_pred - y_train) ** 2).mean())
+    test_mse = float(((test_pred - y_test) ** 2).mean())
+
     metrics = {
-        "train_mse": float(((train_pred - y_train) ** 2).mean()),
-        "test_mse": float(((test_pred - y_test) ** 2).mean()),
-        "train_rmse": float(((train_pred - y_train) ** 2).mean() ** 0.5),
-        "test_rmse": float(((test_pred - y_test) ** 2).mean() ** 0.5),
+        "train_mse": train_mse,
+        "test_mse": test_mse,
+        "train_rmse": train_mse ** 0.5,
+        "test_rmse": test_mse ** 0.5,
         "train_r2": float(r2_score(y_train, train_pred)),
         "test_r2": float(r2_score(y_test, test_pred)),
         "test_rmse_ci_lower": test_rmse_ci[0],
@@ -117,7 +121,7 @@ def train_models(
     Raises:
         FileNotFoundError: If feature files don't exist.
     """
-    features_path = Path(features_dir) / run_id
+    features_path = resolve_run_path(features_dir, run_id)
     train_path = features_path / "train.parquet"
     test_path = features_path / "test.parquet"
 
@@ -159,6 +163,13 @@ def train_models(
             })
 
             mlflow.log_param("feature_count", X_train.shape[1])
+            mlflow.log_param("target_col", target_col)
+            # Exact trained column names + order, so serve.py can build its request
+            # schema and column ordering dynamically per model — no pipeline-specific
+            # schema needs to be hardcoded into the serving layer. Logged as an
+            # artifact (not a param) since some pipelines' feature counts exceed a
+            # param value's length limit.
+            mlflow.log_dict({"columns": list(X_train.columns)}, "feature_columns.json")
             if boxcox_lambda is not None:
                 mlflow.log_param("boxcox_lambda", boxcox_lambda)
             model.fit(X_train, y_train)

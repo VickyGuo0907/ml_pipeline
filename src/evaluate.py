@@ -27,9 +27,27 @@ import yaml
 from src.benchmark import bootstrap_rmse_ci, load_current_benchmark
 from src.monitoring import compute_drift_detected
 from src.utils.config import EvaluationConfig, load_models_config, load_pipeline_config
-from src.utils.io import find_previous_run_id
+from src.utils.io import find_previous_run_id, resolve_run_path
 
 logger = logging.getLogger(__name__)
+
+
+def _ci_pair(metrics: dict[str, Any], prefix: str) -> list[float] | None:
+    """Read a [prefix]_ci_lower/[prefix]_ci_upper pair from an MLflow run's metrics.
+
+    Args:
+        metrics: run.data.metrics dict.
+        prefix: Metric name prefix, e.g. "test_rmse" or "test_r2".
+
+    Returns:
+        [lower, upper], or None if either bound is missing (e.g. runs logged
+        before bootstrapped CIs were added in src/train.py).
+    """
+    lower = metrics.get(f"{prefix}_ci_lower")
+    upper = metrics.get(f"{prefix}_ci_upper")
+    if lower is not None and upper is not None:
+        return [lower, upper]
+    return None
 
 
 def _set_version_tags(
@@ -204,8 +222,8 @@ def register_models_to_mlflow(
         try:
             previous_run_id = find_previous_run_id(features_dir, run_id)
             if previous_run_id is not None:
-                current_train = pd.read_parquet(Path(features_dir) / run_id / "train.parquet")
-                previous_train = pd.read_parquet(Path(features_dir) / previous_run_id / "train.parquet")
+                current_train = pd.read_parquet(resolve_run_path(features_dir, run_id) / "train.parquet")
+                previous_train = pd.read_parquet(resolve_run_path(features_dir, previous_run_id) / "train.parquet")
                 drift_detected = compute_drift_detected(previous_train, current_train)
         except Exception as e:
             logger.warning("Could not compute drift context: %s", e)
@@ -235,13 +253,9 @@ def register_models_to_mlflow(
             test_r2 = metrics.get("test_r2")
             train_r2 = metrics.get("train_r2")
             # Bootstrapped 95% CIs on the held-out test metrics (added in src/train.py).
-            # .get() defaults to None so runs logged before this existed don't break.
-            test_rmse_ci = None
-            if metrics.get("test_rmse_ci_lower") is not None and metrics.get("test_rmse_ci_upper") is not None:
-                test_rmse_ci = [metrics["test_rmse_ci_lower"], metrics["test_rmse_ci_upper"]]
-            test_r2_ci = None
-            if metrics.get("test_r2_ci_lower") is not None and metrics.get("test_r2_ci_upper") is not None:
-                test_r2_ci = [metrics["test_r2_ci_lower"], metrics["test_r2_ci_upper"]]
+            # _ci_pair returns None for runs logged before this existed.
+            test_rmse_ci = _ci_pair(metrics, "test_rmse")
+            test_r2_ci = _ci_pair(metrics, "test_r2")
             model_type = run_tags.get("model_type", "unknown")
             pipeline_type = run_tags.get("pipeline_type", "unknown")
             pipeline_run_id = run_tags.get("run_id", run_id)

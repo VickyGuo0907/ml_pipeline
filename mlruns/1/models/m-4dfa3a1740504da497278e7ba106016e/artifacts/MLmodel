@@ -1,0 +1,23 @@
+artifact_path: /Users/danielguo/Development/ai_learning_projects/ml_pipeline/mlruns/1/models/m-4dfa3a1740504da497278e7ba106016e/artifacts
+flavors:
+  python_function:
+    env:
+      conda: conda.yaml
+      virtualenv: python_env.yaml
+    loader_module: mlflow.sklearn
+    model_path: model.skops
+    predict_fn: predict
+    python_version: 3.12.11
+  sklearn:
+    code: null
+    pickled_model: model.skops
+    serialization_format: skops
+    sklearn_version: 1.3.2
+    skops_trusted_types: null
+mlflow_version: 3.14.0
+model_id: m-4dfa3a1740504da497278e7ba106016e
+model_size_bytes: 7097
+model_uuid: m-4dfa3a1740504da497278e7ba106016e
+prompts: null
+run_id: 54707450d5994758af9af86c664fdde9
+utc_time_created: '2026-08-02 20:37:46.687550'
