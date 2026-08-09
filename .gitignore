@@ -46,3 +46,7 @@ Thumbs.db
 .ipynb_checkpoints/
 
 docs/**
+
+.env
+.env.local
+mlflow-auth/
