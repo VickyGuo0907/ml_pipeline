@@ -15,11 +15,17 @@ scale using the lambda logged during training, when that pipeline used Box-Cox.
 
 Environment variables:
   MLFLOW_TRACKING_URI  — MLflow server (default: http://mlflow-server:5000)
-  SERVING_MODEL_NAME   — which registered model to serve. Must be a full
-                         pipeline-qualified name from that pipeline's models.yaml
-                         (e.g. "hospital_readmission_lagged_lightgbm_gbm") — model
-                         names are prefixed per pipeline to keep MLflow's shared
-                         registry namespace collision-free.
+  SERVING_MODEL_NAME   — which registered model to serve. Required, no default —
+                         this module is pipeline-agnostic and has no basis for
+                         guessing which pipeline's model an operator wants, so an
+                         unset value fails loudly at startup instead of silently
+                         serving whatever pipeline a previous default pointed at.
+                         Must be a full pipeline-qualified name from that
+                         pipeline's models.yaml (e.g.
+                         "hospital_readmission_lagged_lightgbm_gbm") — model names
+                         are prefixed per pipeline to keep MLflow's shared
+                         registry namespace collision-free. See .env.example for
+                         the full list of valid names.
 """
 import logging
 import math
@@ -36,7 +42,7 @@ from pydantic import BaseModel, Field, RootModel
 logger = logging.getLogger(__name__)
 
 MLFLOW_TRACKING_URI = os.environ.get("MLFLOW_TRACKING_URI", "http://mlflow-server:5000")
-SERVING_MODEL_NAME = os.environ.get("SERVING_MODEL_NAME", "hospital_readmission_lagged_lightgbm_gbm")
+SERVING_MODEL_NAME = os.environ.get("SERVING_MODEL_NAME")
 
 FEATURE_COLUMNS_ARTIFACT = "feature_columns.json"
 
@@ -142,7 +148,22 @@ def _inverse_boxcox(value: float, lam: float) -> float:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Load model on startup, release on shutdown."""
+    """Load model on startup, release on shutdown.
+
+    Raises:
+        RuntimeError: If SERVING_MODEL_NAME is unset. This module is
+            pipeline-agnostic by design — there's no correct guess for which
+            pipeline's model to serve, so a missing value fails startup
+            loudly instead of silently falling back to some other
+            deployment's model name.
+    """
+    if not SERVING_MODEL_NAME:
+        raise RuntimeError(
+            "SERVING_MODEL_NAME environment variable is not set. This server "
+            "doesn't default to any pipeline's model — set it to a full "
+            "pipeline-qualified registered model name (e.g. "
+            "'hospital_readmission_lagged_lightgbm_gbm'). See .env.example."
+        )
     result = _load_model(SERVING_MODEL_NAME)
     if result:
         _model_cache.update(result)

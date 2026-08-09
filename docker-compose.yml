@@ -198,10 +198,10 @@ services:
         condition: service_healthy
     environment:
       MLFLOW_TRACKING_URI: http://mlflow-server:5000
-      # Previously undeclared here — SERVING_MODEL_NAME in .env had no effect on the
-      # container regardless of its value, since docker-compose only passes through
-      # host env vars a service's `environment:` block explicitly lists.
-      SERVING_MODEL_NAME: ${SERVING_MODEL_NAME:-hospital_readmission_lagged_lightgbm_gbm}
+      # Must come from .env (see .env.example) — no fallback here. serve.py
+      # itself refuses to start without SERVING_MODEL_NAME set, rather than
+      # this compose file guessing which pipeline's model to serve.
+      SERVING_MODEL_NAME: ${SERVING_MODEL_NAME}
     ports:
       - "8000:8000"
     volumes:
