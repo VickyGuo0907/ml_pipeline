@@ -1,5 +1,7 @@
 # ML Pipeline POC
 
+![CI](https://github.com/VickyGuo0907/ml_pipeline/actions/workflows/ci.yml/badge.svg)
+
 A common, flexible ML pipeline template for tabular regression problems — ingestion, validation,
 feature engineering, training, evaluation, and serving, all driven by YAML config rather than
 code changes. The goal is a reusable pipeline, not a one-off script: add a new dataset by
