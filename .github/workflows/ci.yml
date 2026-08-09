@@ -62,29 +62,28 @@ jobs:
       - name: Install dependencies
         run: uv sync --frozen
 
-      # NOTE: adjust the import below to match your actual loader.
-      # You are looking for whatever dag_factory.py calls to turn a
-      # config/<name>/ directory into validated Pydantic models.
+      # Uses the project's own loader (src/utils/config.py) — same functions
+      # dag_factory.py calls to turn a config/<name>/ directory into
+      # validated Pydantic models, and the same discover_pipelines() it
+      # uses to find pipeline dirs (a valid pipeline dir has an
+      # orchestration.yaml; this also correctly skips config/base and
+      # config/nginx, which aren't pipelines).
       - name: Parse every pipeline config
         run: |
           uv run python - <<'PY'
           import sys
           from pathlib import Path
 
-          sys.path.insert(0, "src")
+          sys.path.insert(0, ".")
 
           try:
-              from config.loader import load_pipeline_config  # <-- adjust
+              from src.utils.config import discover_pipelines, load_pipeline_config
           except ImportError as e:
               print(f"::error::Could not import config loader: {e}")
               print("::error::Edit .github/workflows/ci.yml to match your loader's import path.")
               sys.exit(1)
 
-          config_root = Path("config")
-          pipelines = [
-              d for d in sorted(config_root.iterdir())
-              if d.is_dir() and d.name != "base"
-          ]
+          pipelines = discover_pipelines("config")
 
           if not pipelines:
               print("::error::No pipeline config directories found under config/")
@@ -93,7 +92,7 @@ jobs:
           failed = []
           for d in pipelines:
               try:
-                  load_pipeline_config(d.name)
+                  load_pipeline_config(str(d))
                   print(f"  OK    {d.name}")
               except Exception as e:
                   print(f"::error file=config/{d.name}::{type(e).__name__}: {e}")
@@ -132,7 +131,7 @@ jobs:
         run: |
           uv run python - <<'PY'
           import sys
-          sys.path.insert(0, "src")
+          sys.path.insert(0, ".")
           from airflow.models import DagBag
 
           bag = DagBag(dag_folder="src/dags", include_examples=False)
