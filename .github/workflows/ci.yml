@@ -1,0 +1,144 @@
+# Save as: .github/workflows/ci.yml
+#
+# Runs on every PR to main and every push to main.
+# Two jobs: unit tests, and a config-validation job that parses every
+# config/<pipeline>/ directory through your Pydantic models.
+#
+# The config job is the one worth having: it catches a broken YAML config
+# at PR time instead of at DAG-parse time in Airflow.
+
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+# Cancel superseded runs on the same branch
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - name: Set up Python
+        run: uv python install 3.11
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: Run tests
+        run: uv run pytest tests/ -v --tb=short --durations=10
+
+  validate-configs:
+    name: Validate pipeline configs
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - name: Set up Python
+        run: uv python install 3.11
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      # NOTE: adjust the import below to match your actual loader.
+      # You are looking for whatever dag_factory.py calls to turn a
+      # config/<name>/ directory into validated Pydantic models.
+      - name: Parse every pipeline config
+        run: |
+          uv run python - <<'PY'
+          import sys
+          from pathlib import Path
+
+          sys.path.insert(0, "src")
+
+          try:
+              from config.loader import load_pipeline_config  # <-- adjust
+          except ImportError as e:
+              print(f"::error::Could not import config loader: {e}")
+              print("::error::Edit .github/workflows/ci.yml to match your loader's import path.")
+              sys.exit(1)
+
+          config_root = Path("config")
+          pipelines = [
+              d for d in sorted(config_root.iterdir())
+              if d.is_dir() and d.name != "base"
+          ]
+
+          if not pipelines:
+              print("::error::No pipeline config directories found under config/")
+              sys.exit(1)
+
+          failed = []
+          for d in pipelines:
+              try:
+                  load_pipeline_config(d.name)
+                  print(f"  OK    {d.name}")
+              except Exception as e:
+                  print(f"::error file=config/{d.name}::{type(e).__name__}: {e}")
+                  failed.append(d.name)
+
+          print(f"\n{len(pipelines) - len(failed)}/{len(pipelines)} configs valid")
+          sys.exit(1 if failed else 0)
+          PY
+
+  dag-import:
+    name: Airflow DAG import check
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - name: Set up Python
+        run: uv python install 3.11
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      # Catches import-time errors in dag_factory.py without standing up
+      # the whole Airflow stack. If this fails, the DAG would fail to
+      # appear in the Airflow UI.
+      - name: Import DAGs
+        env:
+          AIRFLOW__CORE__LOAD_EXAMPLES: "False"
+          AIRFLOW_HOME: ${{ runner.temp }}/airflow
+        run: |
+          uv run python - <<'PY'
+          import sys
+          sys.path.insert(0, "src")
+          from airflow.models import DagBag
+
+          bag = DagBag(dag_folder="src/dags", include_examples=False)
+          if bag.import_errors:
+              for path, err in bag.import_errors.items():
+                  print(f"::error file={path}::{err}")
+              sys.exit(1)
+          print(f"Imported {len(bag.dags)} DAG(s): {', '.join(sorted(bag.dags))}")
+          PY

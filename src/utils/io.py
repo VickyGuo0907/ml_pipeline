@@ -16,8 +16,17 @@ MANIFEST_FILENAME = "manifest.yaml"
 # ---------------------------------------------------------------------------
 
 def read_csv(file_path: Path) -> pd.DataFrame:
-    """Read a CSV file into a DataFrame."""
-    return pd.read_csv(file_path)
+    """Read a CSV file into a DataFrame.
+
+    low_memory=False: several CMS source files (e.g. columns mixing sentinel
+    strings like "Not Available" with numeric values) have per-column type
+    ambiguity that pandas' default chunked inference can resolve inconsistently
+    across chunk boundaries, raising a DtypeWarning. Reading in one pass makes
+    dtype inference consistent for the whole column; downstream sentinel
+    replacement and type coercion (validate.py, clean.py) still do the real
+    normalization regardless of what's inferred here.
+    """
+    return pd.read_csv(file_path, low_memory=False)
 
 
 def read_parquet(file_path: Path) -> pd.DataFrame:

@@ -29,7 +29,7 @@ data/source_data/**
 
 # ML artifacts
 mlflow-artifacts/
-
+mlruns/
 
 # OS
 .DS_Store
