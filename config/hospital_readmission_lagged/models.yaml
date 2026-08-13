@@ -54,6 +54,15 @@ diagnostics:
   enabled: true
   linear_types: ["ols", "ridge", "lasso", "elastic_net"]
 
+# Ranked feature importance per model, read from coef_ (linear) or
+# feature_importances_ (trees). No SHAP dependency: for the elastic-net champion the
+# coefficients already are the explanation, and sklearn's built-in importances answer
+# the same question for the tree models at no cost. Full ranking is an MLflow
+# artifact; the top 10 lands in the evaluation report.
+feature_importance:
+  enabled: true
+  top_n: 10
+
 models:
   - name: "hospital_readmission_lagged_elastic_net"
     type: "elastic_net"

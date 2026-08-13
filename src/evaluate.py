@@ -13,6 +13,7 @@ benchmark_dir/features_dir are provided — attaches a statistically-grounded
 regression_vs_production flag and drift_detected context. See
 docs/superpowers/specs/2026-07-03-champion-challenger-regression-check-design.md.
 """
+import json
 import logging
 import math
 from datetime import datetime, timezone
@@ -102,6 +103,48 @@ def _diagnostics_summary(metrics: dict[str, Any]) -> dict[str, Any] | None:
     )
     found = {k: metrics[k] for k in keys if k in metrics}
     return found or None
+
+
+def _importance_summary(
+    client: mlflow.tracking.MlflowClient,
+    run_id: str,
+    metrics: dict[str, Any],
+    top_n: int = 10,
+) -> dict[str, Any] | None:
+    """Read the feature_importance.json artifact logged by src/train.py, if present.
+
+    The full ranking lives in the artifact; only the head of it is copied into
+    the evaluation report so that file stays readable.
+
+    Args:
+        client: MLflow client used to fetch the artifact.
+        run_id: MLflow run to read from.
+        metrics: run.data.metrics, used for the non-zero count.
+        top_n: How many ranked features to include.
+
+    Returns:
+        Dict with source, non-zero count and the top features, or None if the
+        run has no importance artifact (older runs, or pipelines with the
+        feature disabled).
+    """
+    try:
+        local = client.download_artifacts(run_id, "feature_importance.json")
+        with open(local) as f:
+            data = json.load(f)
+    except Exception:
+        return None
+    ranking = data.get("ranking") or []
+    if not ranking:
+        return None
+    return {
+        "source": data.get("source"),
+        "n_nonzero": data.get("n_nonzero", metrics.get("n_nonzero_features")),
+        "n_features": data.get("n_features"),
+        "top": [
+            {"feature": r["feature"], "value": round(r["value"], 6)}
+            for r in ranking[:top_n]
+        ],
+    }
 
 
 def _select_champion(
@@ -512,6 +555,13 @@ def register_models_to_mlflow(
             diag_block = _diagnostics_summary(metrics)
             if diag_block is not None:
                 report["models"][model_name]["residual_diagnostics"] = diag_block
+            if models_cfg.feature_importance.enabled:
+                imp_block = _importance_summary(
+                    client, mlflow_run_id, metrics,
+                    top_n=models_cfg.feature_importance.top_n,
+                )
+                if imp_block is not None:
+                    report["models"][model_name]["feature_importance"] = imp_block
             registration_results["registered_models"][model_name] = {
                 "status": "registered",
                 "version": version,

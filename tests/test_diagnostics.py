@@ -179,3 +179,66 @@ def test_cv_summary_collects_per_fold_metrics_in_order():
 
 def test_cv_summary_returns_none_without_cv():
     assert _cv_summary({"test_r2": 0.1}, {}) is None
+
+
+# --------------------------- feature importance ---------------------------
+
+from sklearn.ensemble import RandomForestRegressor  # noqa: E402
+
+from src.utils.config import FeatureImportanceConfig  # noqa: E402
+from src.utils.diagnostics import feature_importance  # noqa: E402
+
+
+def test_importance_from_linear_model_keeps_sign():
+    X, y = _linear_data()
+    m = LinearRegression().fit(X, y)
+    out = feature_importance(m, list(X.columns))
+    assert out["source"] == "coef_"
+    assert out["signed"] is True
+    assert out["n_features"] == 3
+    # x1 has the largest true coefficient (2.0), so it should rank first
+    assert out["ranking"][0]["feature"] == "x1"
+
+
+def test_importance_from_tree_model_is_unsigned():
+    X, y = _linear_data()
+    m = RandomForestRegressor(n_estimators=10, random_state=0).fit(X, y)
+    out = feature_importance(m, list(X.columns))
+    assert out["source"] == "feature_importances_"
+    assert out["signed"] is False
+    assert all(r["value"] >= 0 for r in out["ranking"])
+
+
+def test_importance_ranks_by_magnitude_not_value():
+    """A large negative coefficient must outrank a small positive one."""
+    class Fake:
+        coef_ = np.array([0.1, -0.9, 0.3])
+    out = feature_importance(Fake(), ["a", "b", "c"])
+    assert [r["feature"] for r in out["ranking"]] == ["b", "c", "a"]
+    assert out["ranking"][0]["value"] == -0.9  # sign preserved
+
+
+def test_importance_counts_nonzero_for_sparse_models():
+    class Fake:
+        coef_ = np.array([0.0, 0.5, 0.0, -0.2])
+    out = feature_importance(Fake(), ["a", "b", "c", "d"])
+    assert out["n_nonzero"] == 2
+    assert out["n_features"] == 4
+
+
+def test_importance_returns_none_for_unsupported_model():
+    class NoAttrs:
+        pass
+    assert feature_importance(NoAttrs(), ["a"]) is None
+
+
+def test_importance_returns_none_on_length_mismatch():
+    class Fake:
+        coef_ = np.array([0.1, 0.2])
+    assert feature_importance(Fake(), ["a", "b", "c"]) is None
+
+
+def test_feature_importance_config_defaults_to_disabled():
+    cfg = FeatureImportanceConfig()
+    assert cfg.enabled is False
+    assert cfg.top_n == 10

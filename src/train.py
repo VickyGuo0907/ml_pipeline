@@ -12,7 +12,11 @@ from sklearn.metrics import r2_score
 
 from src.benchmark import bootstrap_metric_ci
 from src.utils.config import load_models_config, load_pipeline_config
-from src.utils.diagnostics import cross_validate_model, residual_diagnostics
+from src.utils.diagnostics import (
+    cross_validate_model,
+    feature_importance,
+    residual_diagnostics,
+)
 from src.utils.io import resolve_run_path
 from src.utils.model_registry import get_model
 
@@ -210,6 +214,24 @@ def train_models(
             # Residual assumption tests, only for linear families — tree ensembles
             # make no distributional assumptions about their errors, so these
             # statistics would not be interpretable for them.
+            # Ranked feature importance, from whichever attribute the model family
+            # exposes. Full ranking goes to MLflow as an artifact (73 features is
+            # too many for params); the top N is echoed into the evaluation report.
+            importance: dict[str, Any] | None = None
+            fi_cfg = models_config.feature_importance
+            if fi_cfg.enabled:
+                importance = feature_importance(model, list(X_train.columns))
+                if importance:
+                    mlflow.log_dict(importance, "feature_importance.json")
+                    mlflow.log_metric("n_nonzero_features", importance["n_nonzero"])
+                    for rank, item in enumerate(importance["ranking"][: fi_cfg.top_n], 1):
+                        mlflow.log_param(f"top_feature_{rank}", item["feature"][:250])
+                    logger.info(
+                        "Feature importance (%s) for %s: %d/%d non-zero, top=%s",
+                        importance["source"], model_cfg.name, importance["n_nonzero"],
+                        importance["n_features"], importance["ranking"][0]["feature"],
+                    )
+
             diag: dict[str, float] = {}
             diag_cfg = models_config.diagnostics
             if diag_cfg.enabled and model_cfg.type in diag_cfg.linear_types:
@@ -269,5 +291,11 @@ def train_models(
             training_results["models"][model_cfg.name]["cross_validation"] = cv_summary
         if diag:
             training_results["models"][model_cfg.name]["residual_diagnostics"] = diag
+        if importance is not None:
+            training_results["models"][model_cfg.name]["feature_importance"] = {
+                "source": importance["source"],
+                "n_nonzero": importance["n_nonzero"],
+                "top": importance["ranking"][: models_config.feature_importance.top_n],
+            }
 
     return training_results

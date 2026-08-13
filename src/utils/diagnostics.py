@@ -108,6 +108,57 @@ def cross_validate_model(
     }
 
 
+def feature_importance(model: Any, feature_names: list[str]) -> dict[str, Any] | None:
+    """Extract a ranked feature importance table from any fitted estimator.
+
+    Reads whichever attribute the model family exposes:
+
+    * Linear models expose `coef_` — signed weights. The sign is kept, because
+      the direction of an effect is usually the point ("better discharge scores
+      lower readmissions"), and ranking is done on magnitude.
+    * Tree ensembles expose `feature_importances_` — always non-negative, so
+      there is no direction to report, only relative contribution.
+
+    No SHAP dependency: for a linear model the coefficients already *are* the
+    explanation, and for the tree models sklearn's built-in importances answer
+    the same question at no cost.
+
+    Args:
+        model: A fitted estimator.
+        feature_names: Column names, in the order the model was trained on.
+
+    Returns:
+        Dict with the source attribute, the number of non-zero terms, and the
+        full ranking as (name, value) pairs sorted by magnitude. None if the
+        estimator exposes neither attribute.
+    """
+    if hasattr(model, "coef_"):
+        values = np.asarray(model.coef_, dtype=float).ravel()
+        source, signed = "coef_", True
+    elif hasattr(model, "feature_importances_"):
+        values = np.asarray(model.feature_importances_, dtype=float).ravel()
+        source, signed = "feature_importances_", False
+    else:
+        logger.info("Model exposes no coef_ or feature_importances_; skipping importance")
+        return None
+
+    if len(values) != len(feature_names):
+        logger.warning(
+            "Importance length %d != feature count %d; skipping",
+            len(values), len(feature_names),
+        )
+        return None
+
+    ranked = sorted(zip(feature_names, values), key=lambda kv: abs(kv[1]), reverse=True)
+    return {
+        "source": source,
+        "signed": signed,
+        "n_features": len(values),
+        "n_nonzero": int(np.count_nonzero(values)),
+        "ranking": [{"feature": f, "value": float(v)} for f, v in ranked],
+    }
+
+
 def residual_diagnostics(y_true: pd.Series, y_pred: np.ndarray) -> dict[str, float]:
     """Test the classical linear-regression assumptions on a model's residuals.
 

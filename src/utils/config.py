@@ -327,6 +327,22 @@ class DiagnosticsConfig(BaseModel):
     )
 
 
+class FeatureImportanceConfig(BaseModel):
+    """Per-run feature importance logging.
+
+    Reads coef_ (linear models) or feature_importances_ (tree ensembles), so it
+    works for every type in the model registry without extra dependencies. The
+    full ranking is logged to MLflow as an artifact; only `top_n` entries are
+    copied into the evaluation report, to keep that file readable.
+    """
+
+    enabled: bool = Field(default=False, description="Log ranked feature importance")
+    top_n: int = Field(
+        default=10, ge=1,
+        description="How many of the ranked features to include in the evaluation report",
+    )
+
+
 class ModelsConfig(BaseModel):
     """Models configuration."""
 
@@ -336,6 +352,9 @@ class ModelsConfig(BaseModel):
     evaluation: EvaluationConfig = Field(default_factory=EvaluationConfig)
     cross_validation: CrossValidationConfig = Field(default_factory=CrossValidationConfig)
     diagnostics: DiagnosticsConfig = Field(default_factory=DiagnosticsConfig)
+    feature_importance: FeatureImportanceConfig = Field(
+        default_factory=FeatureImportanceConfig
+    )
 
 
 class OrchestrationDAGConfig(BaseModel):
