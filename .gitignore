@@ -38,6 +38,8 @@ Thumbs.db
 # Test / IDE caches
 .pytest_cache/
 .jbeval/
+.coverage
+.coverage.*
 
 # Claude Code local state (local settings, worktrees)
 .claude/
