@@ -158,10 +158,56 @@ All config in `config/` directory, validated via Pydantic models:
 - `config/<pipeline>/pipeline.yaml` — Sources, target, problem type, split ratio; `validation.sentinel_values` (dataset-specific missing-value strings); `validation.per_file_schemas` (per-file required columns and bounds); `unsupervised` (enable/disable PCA and clustering, set `max_k`)
 - `config/<pipeline>/cleaning.yaml` — Data cleaning recipes (impute strategy, protect columns, drop patterns)
 - `config/<pipeline>/features.yaml` — Feature engineering (encoding, join strategy, NZV filter, VIF threshold, scaling)
-- `config/<pipeline>/models.yaml` — Model hyperparameters (linear, LightGBM)
+- `config/<pipeline>/models.yaml` — Model hyperparameters (linear family, LightGBM); `evaluation` registration thresholds plus `champion_metric` (`test_rmse` or `cv_r2`) and `cv_tie_tolerance`; `cross_validation` (`folds`, optional `group_column`); `diagnostics` (residual assumption tests, `linear_types` only); `feature_importance` (`top_n` ranked coefficients or split gains). The last three default to `enabled: false`, so a pipeline that does not opt in behaves exactly as before they existed.
 
 Active pipelines: `biomedical_clinical` (@weekly), `bioinfo_gene` (@monthly),
 `hospital_readmission_lagged` (@monthly).
+
+#### Model validation options
+
+Three optional blocks in `models.yaml` control how thoroughly a model is checked before it is
+registered. All are off by default; `hospital_readmission_lagged` enables all three.
+
+```yaml
+cross_validation:
+  enabled: true
+  folds: 5
+  group_column: "State"   # null = shuffled KFold; a column name = GroupKFold
+
+diagnostics:
+  enabled: true           # residual assumption tests
+  linear_types: ["ols", "ridge", "lasso", "elastic_net"]
+
+feature_importance:
+  enabled: true
+  top_n: 10
+
+evaluation:
+  min_test_r2: 0.0           # reject models no better than predicting the mean
+  max_test_rmse: 0.12        # reject models above this error
+  champion_metric: "cv_r2"   # or "test_rmse" (default)
+  cv_tie_tolerance: 0.005
+```
+
+- **`cross_validation`** — k-fold CV on the training set, run before the final fit so the hold-out
+  test set is never touched during model comparison. Setting `group_column` switches to
+  `GroupKFold`, keeping every row that shares a value inside one fold. Use it when observations are
+  not independent: in `hospital_readmission_lagged`, grouping by `State` drops the elastic net from
+  R² 0.072 to 0.051, because hospitals in a state share patient populations and referral patterns
+  and a random split lets the model see near-neighbours of its test cases.
+- **`diagnostics`** — Durbin-Watson (independence), Breusch-Pagan (homoscedasticity), Shapiro-Wilk
+  and Jarque-Bera (normality) on test residuals. Only model types listed in `linear_types` are
+  tested; tree ensembles make no distributional assumptions about their errors, so the same
+  statistics would not be interpretable for them.
+- **`feature_importance`** — ranked importance read from each model's own `coef_` (signed) or
+  `feature_importances_` (unsigned), so no explainability dependency is needed. The full ranking is
+  logged to MLflow as `feature_importance.json`; the top `top_n` goes into the evaluation report.
+- **`champion_metric`** — `test_rmse` picks the lowest hold-out RMSE. `cv_r2` picks the highest
+  cross-validated R², treats models within `cv_tie_tolerance` as tied, and breaks the tie on
+  fold-to-fold stability. It falls back to `test_rmse` if CV results are missing.
+
+All four appear per model in `reports/<pipeline>/<run_id>_evaluation.yaml` alongside the existing
+metrics, and as MLflow metrics/params on each run.
 
 **Key Feature:** `src/dags/dag_factory.py` auto-discovers pipeline directories and registers one Airflow DAG per pipeline. Add a new pipeline by dropping a new `config/<name>/` directory — no Python changes needed.
 
