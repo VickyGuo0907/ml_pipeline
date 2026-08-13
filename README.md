@@ -8,7 +8,7 @@ code changes. The goal is a reusable pipeline, not a one-off script: add a new d
 dropping a `config/<pipeline>/` directory, and `dag_factory.py` auto-discovers it and registers
 a new Airflow DAG with no Python changes required.
 
-Two demo pipelines exercise this in the repo today:
+Three demo pipelines exercise this in the repo today:
 
 - **`biomedical_clinical`** — CMS Hospital Compare hospital readmission data (the primary
   walkthrough in this README, since it has the richest config: multi-source pivot-joins, Box-Cox,
@@ -16,6 +16,11 @@ Two demo pipelines exercise this in the repo today:
 - **`bioinfo_gene`** — a second, differently-shaped dataset (gene expression), proving the same
   codebase adapts to a new domain through config alone, with its own optional-task toggles
   (profiling on, clustering and drift off)
+- **`hospital_readmission_lagged`** — same CMS source, different problem shape: predicts a
+  hospital's 2025 pneumonia excess readmission ratio from its 2024 quality measures (a genuine
+  one-period-ahead forecast, not same-year association). Also the pipeline where a leakage-prone
+  predictor was found and removed post-launch — see its section under
+  [Demo Pipelines](#demo-pipelines) for the story.
 
 CMS Hospital Compare is one demo dataset used to present the pipeline, not the point of the
 project — the point is that swapping it for a different dataset takes a new config directory,
@@ -112,9 +117,13 @@ mlflow-artifacts/
 
 ### Model Registry
 
-- **Linear Baseline** — sklearn regularized linear regression
-- **LightGBM** — Gradient boosting model
-- Both registered to MLflow `Staging` environment
+- Model types come from `models.yaml` per pipeline (linear family + LightGBM at minimum;
+  `biomedical_clinical` also runs Ridge/Lasso/Random Forest)
+- **Registered model names are pipeline-prefixed** (e.g. `hospital_readmission_lagged_lightgbm_gbm`,
+  not just `lightgbm_gbm`) — MLflow's registry namespace is shared across every pipeline in this
+  repo, so an unprefixed name from one pipeline can silently collide with and overwrite another's
+  version history. `models.yaml`'s `name:` field must be the full prefixed name for every model.
+- All registered to MLflow `Staging`
 - **NO automatic promotion to Production** — manual UI click only
 
 ### Champion/Challenger & Regression Detection
@@ -151,7 +160,8 @@ All config in `config/` directory, validated via Pydantic models:
 - `config/<pipeline>/features.yaml` — Feature engineering (encoding, join strategy, NZV filter, VIF threshold, scaling)
 - `config/<pipeline>/models.yaml` — Model hyperparameters (linear, LightGBM)
 
-Active pipelines: `biomedical_clinical` (@weekly), `bioinfo_gene` (@monthly).
+Active pipelines: `biomedical_clinical` (@weekly), `bioinfo_gene` (@monthly),
+`hospital_readmission_lagged` (@monthly).
 
 **Key Feature:** `src/dags/dag_factory.py` auto-discovers pipeline directories and registers one Airflow DAG per pipeline. Add a new pipeline by dropping a new `config/<name>/` directory — no Python changes needed.
 
@@ -196,7 +206,7 @@ The DIAGNOSTICS.md guide covers:
 #### Running the DAG
 
 1. Open Airflow UI: http://localhost:8080
-2. Find `biomedical_clinical_pipeline` or `bioinfo_gene_pipeline`
+2. Find `biomedical_clinical_pipeline`, `bioinfo_gene_pipeline`, or `hospital_readmission_lagged_pipeline`
 3. Click **Trigger DAG** (or wait for next scheduled run)
 4. Monitor task execution in the Graph view
 
@@ -243,6 +253,28 @@ fully tuned:
   off via `tasks.enabled` — showing the same DAG factory adapts without touching Python
 
 Place CSV files in `data/bioinfo_gene/landing/` before running its DAG.
+
+### `hospital_readmission_lagged` — one-period-ahead forecast (third demo)
+
+Same CMS Hospital Compare source as `biomedical_clinical`, but a deliberately different problem
+shape: predicts each hospital's **2025** pneumonia excess readmission ratio from its **2024**
+quality measures (a lagged, one-year-ahead forecast), instead of same-year association.
+- **Rows:** ~3,063 hospitals matched across both years
+- **Target:** `Excess Readmission Ratio` (pneumonia, `READM-30-PN-HRRP`, continuous)
+- **Exercises:** the same pivot-join assembly as `biomedical_clinical`, plus a direct-join source
+  (`Hospital_General_Information`, already one row per hospital — no pivot needed)
+
+**Leakage lesson (worth reading if you're extending this pipeline or adding your own):** an early
+version scored much higher (test R² ~0.22) because `Count of READM Measures Better/Worse` — a
+CMS-computed field from the *same* 2024 hospital-quality file — turned out to be a coarsened
+proxy for the hospital's own historical readmission performance, verified by checking its
+correlation against the *contemporaneous* 2024 ratio (0.44) vs. the actual 2025 target (0.39) —
+nearly identical strength, the signature of a proxy riding on year-over-year persistence
+(measured directly at 0.81) rather than real predictive signal. Removed via `drop_columns` in
+`config/hospital_readmission_lagged/features.yaml`; true test R² dropped to ~0.05–0.07 — a
+lower but honest number. The general lesson: any field derived from the *same underlying
+event* as the target, even under a different name or computed by a different party (here, CMS's
+own star-rating methodology), deserves the same suspicion as an obviously duplicated column.
 
 ## Key Design Decisions
 
