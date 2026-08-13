@@ -50,6 +50,108 @@ def _ci_pair(metrics: dict[str, Any], prefix: str) -> list[float] | None:
     return None
 
 
+def _cv_summary(metrics: dict[str, Any], params: dict[str, Any]) -> dict[str, Any] | None:
+    """Read cross-validation results logged by src/train.py, if present.
+
+    Args:
+        metrics: run.data.metrics dict.
+        params: run.data.params dict (holds the strategy and fold count).
+
+    Returns:
+        Dict with strategy, folds and CV summary statistics, or None when the
+        run predates CV or the pipeline has cross_validation disabled.
+    """
+    if "cv_r2_mean" not in metrics:
+        return None
+    folds = [
+        metrics[k]
+        for k in sorted(
+            (m for m in metrics if m.startswith("cv_r2_fold_")),
+            key=lambda m: int(m.rsplit("_", 1)[1]),
+        )
+    ]
+    out: dict[str, Any] = {
+        "strategy": params.get("cv_strategy"),
+        "folds": int(params["cv_folds"]) if params.get("cv_folds") else None,
+        "cv_r2_mean": metrics.get("cv_r2_mean"),
+        "cv_r2_std": metrics.get("cv_r2_std"),
+        "cv_rmse_mean": metrics.get("cv_rmse_mean"),
+        "cv_r2_per_fold": [round(f, 6) for f in folds] or None,
+    }
+    return {k: v for k, v in out.items() if v is not None}
+
+
+def _diagnostics_summary(metrics: dict[str, Any]) -> dict[str, Any] | None:
+    """Read residual diagnostics logged by src/train.py, if present.
+
+    Only linear model families have these; tree ensembles never will.
+
+    Args:
+        metrics: run.data.metrics dict.
+
+    Returns:
+        Dict of assumption-test statistics, or None if none were logged.
+    """
+    keys = (
+        "durbin_watson",
+        "breusch_pagan_p",
+        "shapiro_p",
+        "jarque_bera_p",
+        "resid_skew",
+        "resid_kurtosis",
+    )
+    found = {k: metrics[k] for k in keys if k in metrics}
+    return found or None
+
+
+def _select_champion(
+    report_models: dict[str, Any],
+    registered: list[str],
+    metric: str = "test_rmse",
+    tie_tolerance: float = 0.005,
+) -> str:
+    """Choose the run champion from the registered models.
+
+    Two strategies:
+
+    * "test_rmse" — lowest hold-out RMSE. The original behaviour, and the only
+      option available when cross-validation is disabled.
+    * "cv_r2" — highest cross-validated R². Any model within `tie_tolerance` of
+      the best is treated as tied, and the tie is broken on fold-to-fold
+      stability (lowest cv_r2_std). Two models with the same mean are not
+      equally useful if one swings twice as much between folds; the steadier one
+      is the safer thing to carry forward.
+
+    Falls back to test_rmse if CV results are missing for any registered model,
+    so a misconfigured run degrades to the previous behaviour rather than failing.
+
+    Args:
+        report_models: The report's per-model dicts.
+        registered: Names of models that passed the registration gate.
+        metric: "test_rmse" or "cv_r2".
+        tie_tolerance: Distance in R² within which models count as tied.
+
+    Returns:
+        The winning model name.
+    """
+    if metric == "cv_r2":
+        cv = {n: report_models[n].get("cross_validation") for n in registered}
+        if all(c and c.get("cv_r2_mean") is not None for c in cv.values()):
+            best = max(cv[n]["cv_r2_mean"] for n in registered)
+            tied = [n for n in registered if best - cv[n]["cv_r2_mean"] <= tie_tolerance]
+            if len(tied) > 1:
+                logger.info(
+                    "Champion: %d models within %.3f R² of the best; breaking tie on "
+                    "fold stability", len(tied), tie_tolerance,
+                )
+            return min(tied, key=lambda n: cv[n].get("cv_r2_std", float("inf")))
+        logger.warning(
+            "champion_metric='cv_r2' but cross-validation results are missing; "
+            "falling back to test_rmse"
+        )
+    return min(registered, key=lambda n: report_models[n]["test_rmse"])
+
+
 def _set_version_tags(
     client: mlflow.tracking.MlflowClient,
     name: str,
@@ -246,6 +348,7 @@ def register_models_to_mlflow(
             run = mlflow.get_run(mlflow_run_id)
             metrics = run.data.metrics
             run_tags = run.data.tags
+            run_params = run.data.params
 
             test_rmse = metrics.get("test_rmse")
             train_rmse = metrics.get("train_rmse", 0.0)
@@ -403,6 +506,12 @@ def register_models_to_mlflow(
                 report["models"][model_name].update(regression_info)
             if drift_detected is not None:
                 report["models"][model_name]["drift_detected"] = drift_detected
+            cv_block = _cv_summary(metrics, run_params)
+            if cv_block is not None:
+                report["models"][model_name]["cross_validation"] = cv_block
+            diag_block = _diagnostics_summary(metrics)
+            if diag_block is not None:
+                report["models"][model_name]["residual_diagnostics"] = diag_block
             registration_results["registered_models"][model_name] = {
                 "status": "registered",
                 "version": version,
@@ -430,8 +539,14 @@ def register_models_to_mlflow(
 
     registered = [k for k, v in report["models"].items() if v["status"] == "registered"]
     if registered:
-        champion_name = min(registered, key=lambda name: report["models"][name]["test_rmse"])
+        champion_name = _select_champion(
+            report["models"],
+            registered,
+            metric=models_cfg.evaluation.champion_metric,
+            tie_tolerance=models_cfg.evaluation.cv_tie_tolerance,
+        )
         report["run_champion"] = champion_name
+        report["champion_metric"] = models_cfg.evaluation.champion_metric
         champion_version = report["models"][champion_name]["version"]
         try:
             _set_version_tags(client, champion_name, champion_version, {"run_champion": "true"})

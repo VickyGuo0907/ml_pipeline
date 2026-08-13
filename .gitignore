@@ -50,3 +50,6 @@ docs/**
 .env
 .env.local
 mlflow-auth/
+
+# reports folder
+reports/**/*.html

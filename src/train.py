@@ -12,6 +12,7 @@ from sklearn.metrics import r2_score
 
 from src.benchmark import bootstrap_metric_ci
 from src.utils.config import load_models_config, load_pipeline_config
+from src.utils.diagnostics import cross_validate_model, residual_diagnostics
 from src.utils.io import resolve_run_path
 from src.utils.model_registry import get_model
 
@@ -172,8 +173,55 @@ def train_models(
             mlflow.log_dict({"columns": list(X_train.columns)}, "feature_columns.json")
             if boxcox_lambda is not None:
                 mlflow.log_param("boxcox_lambda", boxcox_lambda)
+            # Cross-validation runs on the training set only, before the final fit,
+            # so the held-out test set is never touched during model comparison.
+            cv_summary: dict[str, Any] | None = None
+            cv_cfg = models_config.cross_validation
+            if cv_cfg.enabled:
+                try:
+                    cv_summary = cross_validate_model(
+                        model,
+                        X_train,
+                        y_train,
+                        folds=cv_cfg.folds,
+                        group_column=cv_cfg.group_column,
+                        random_state=models_config.random_state,
+                    )
+                    mlflow.log_param("cv_strategy", cv_summary["strategy"])
+                    mlflow.log_param("cv_folds", cv_summary["folds"])
+                    for key in ("cv_r2_mean", "cv_r2_std", "cv_rmse_mean", "cv_rmse_std"):
+                        mlflow.log_metric(key, cv_summary[key])
+                    # Per-fold scores as individual metrics: MLflow metrics are scalars,
+                    # and having the folds means the spread behind cv_r2_std is auditable
+                    # from the evaluation report rather than taken on trust.
+                    for i, fold_score in enumerate(cv_summary["cv_r2_folds"], start=1):
+                        mlflow.log_metric(f"cv_r2_fold_{i}", fold_score)
+                    logger.info(
+                        "CV (%s) for %s: R2=%.4f +/- %.4f",
+                        cv_summary["strategy"], model_cfg.name,
+                        cv_summary["cv_r2_mean"], cv_summary["cv_r2_std"],
+                    )
+                except Exception as e:
+                    logger.warning("Cross-validation skipped for %s: %s", model_cfg.name, e)
+
             model.fit(X_train, y_train)
             metrics, test_pred = _log_metrics(model, X_train, y_train, X_test, y_test)
+
+            # Residual assumption tests, only for linear families — tree ensembles
+            # make no distributional assumptions about their errors, so these
+            # statistics would not be interpretable for them.
+            diag: dict[str, float] = {}
+            diag_cfg = models_config.diagnostics
+            if diag_cfg.enabled and model_cfg.type in diag_cfg.linear_types:
+                diag = residual_diagnostics(y_test, test_pred.to_numpy())
+                for key, value in diag.items():
+                    mlflow.log_metric(key, value)
+                if diag:
+                    logger.info(
+                        "Diagnostics for %s: DW=%.3f BP_p=%s",
+                        model_cfg.name, diag.get("durbin_watson", float("nan")),
+                        diag.get("breusch_pagan_p"),
+                    )
 
             model_id: str | None = None
             try:
@@ -217,5 +265,9 @@ def train_models(
             "test_r2": metrics["test_r2"],
             "feature_count": X_train.shape[1],
         }
+        if cv_summary is not None:
+            training_results["models"][model_cfg.name]["cross_validation"] = cv_summary
+        if diag:
+            training_results["models"][model_cfg.name]["residual_diagnostics"] = diag
 
     return training_results

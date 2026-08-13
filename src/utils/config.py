@@ -1,7 +1,7 @@
 """Configuration models and loaders using Pydantic."""
 from enum import Enum
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 import yaml
 from pydantic import BaseModel, Field, field_validator
@@ -269,6 +269,62 @@ class EvaluationConfig(BaseModel):
         default=None,
         description="Maximum acceptable test RMSE. Models above are rejected.",
     )
+    champion_metric: Literal["test_rmse", "cv_r2"] = Field(
+        default="test_rmse",
+        description=(
+            "How the run champion is chosen. 'test_rmse' picks the lowest hold-out "
+            "RMSE (the original behaviour). 'cv_r2' picks the highest cross-validated "
+            "R², breaking ties on fold-to-fold stability — appropriate once "
+            "cross_validation is enabled, since a single hold-out number is a "
+            "noisier basis for the decision than a k-fold mean."
+        ),
+    )
+    cv_tie_tolerance: float = Field(
+        default=0.005,
+        ge=0.0,
+        description=(
+            "Models whose cross-validated R² is within this distance of the best "
+            "are treated as tied, and the most stable (lowest fold standard "
+            "deviation) wins. Only used when champion_metric is 'cv_r2'."
+        ),
+    )
+
+
+class CrossValidationConfig(BaseModel):
+    """K-fold cross-validation settings for the training stage.
+
+    Disabled by default so pipelines that don't opt in are unaffected. A single
+    train/test split yields one estimate with no measure of its variability;
+    k-fold CV yields a mean and spread, which is the fairer basis for comparing
+    models.
+
+    Set `group_column` to a feature column when observations are not independent
+    (e.g. "State", so hospitals from one state stay within a single fold). This
+    guards against optimistic scores caused by near-neighbours of a test case
+    appearing in training.
+    """
+
+    enabled: bool = Field(default=False, description="Run k-fold CV during training")
+    folds: int = Field(default=5, ge=2, description="Number of folds")
+    group_column: str | None = Field(
+        default=None,
+        description="Feature column defining groups; null uses a shuffled KFold",
+    )
+
+
+class DiagnosticsConfig(BaseModel):
+    """Residual diagnostics for linear model families.
+
+    These test classical regression assumptions (independence, homoscedasticity,
+    normality of errors). They are not meaningful for tree ensembles, so only
+    model types listed in `linear_types` are diagnosed.
+    """
+
+    enabled: bool = Field(default=False, description="Run residual diagnostics")
+    linear_types: list[str] = Field(
+        default_factory=lambda: ["ols", "ridge", "lasso", "elastic_net"],
+        description="Model types whose residual assumptions are testable",
+    )
 
 
 class ModelsConfig(BaseModel):
@@ -278,6 +334,8 @@ class ModelsConfig(BaseModel):
     random_state: int = Field(default=42)
     train_test_split: float = Field(default=0.8, ge=0.0, le=1.0)
     evaluation: EvaluationConfig = Field(default_factory=EvaluationConfig)
+    cross_validation: CrossValidationConfig = Field(default_factory=CrossValidationConfig)
+    diagnostics: DiagnosticsConfig = Field(default_factory=DiagnosticsConfig)
 
 
 class OrchestrationDAGConfig(BaseModel):

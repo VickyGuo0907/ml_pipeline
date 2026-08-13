@@ -25,6 +25,34 @@ train_test_split: 0.80
 evaluation:
   min_test_r2: 0.0
   max_test_rmse: 0.12
+  # Champion is chosen on cross-validated R² rather than a single hold-out RMSE.
+  # Under State-grouped CV all three models land within 0.003 R² of each other
+  # (elastic_net 0.0505, random_forest 0.0529, lightgbm 0.0506), so the mean alone
+  # cannot separate them — but their fold-to-fold spreads differ by 3x
+  # (0.027 / 0.055 / 0.080). Ties within cv_tie_tolerance are therefore broken on
+  # stability, which favours the model that behaves consistently across regions.
+  # Default remains "test_rmse", so biomedical_clinical and bioinfo_gene are unaffected.
+  champion_metric: "cv_r2"
+  cv_tie_tolerance: 0.005
+
+# 5-fold CV on the training set, grouped by State. Hospitals in the same state share
+# patient populations, referral patterns and policy environments, so a plain random
+# split can put near-neighbours of a test hospital into training and overstate
+# performance. Measured on the 2026-08-05 matrix: the elastic net scores 0.072 +/- 0.008
+# under a shuffled KFold but 0.051 +/- 0.027 when grouped by State, so roughly a third
+# of the apparent performance came from that leakage across folds.
+# Defaults are enabled: false, so biomedical_clinical and bioinfo_gene are unaffected.
+cross_validation:
+  enabled: true
+  folds: 5
+  group_column: "State"
+
+# Residual assumption tests. Only linear families are diagnosed — tree ensembles make
+# no distributional assumptions about their errors, so Durbin-Watson or Breusch-Pagan
+# would not be interpretable for the random forest or LightGBM.
+diagnostics:
+  enabled: true
+  linear_types: ["ols", "ridge", "lasso", "elastic_net"]
 
 models:
   - name: "hospital_readmission_lagged_elastic_net"
