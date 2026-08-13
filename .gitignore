@@ -51,5 +51,6 @@ docs/**
 .env.local
 mlflow-auth/
 
-# reports folder
-reports/**/*.html
+# reports folder (keep only the directory marker)
+reports/*
+!reports/.gitkeep

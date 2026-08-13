@@ -33,12 +33,12 @@ def reset_model_cache():
     """Ensure no state leaks between tests — each test sets up its own cache."""
     _model_cache.update({
         "model": None, "model_name": None, "model_version": None, "model_stage": None,
-        "boxcox_lambda": None, "feature_columns": None, "target_col": None,
+        "boxcox_lambda": None, "boxcox_offset": None, "feature_columns": None, "target_col": None,
     })
     yield
     _model_cache.update({
         "model": None, "model_name": None, "model_version": None, "model_stage": None,
-        "boxcox_lambda": None, "feature_columns": None, "target_col": None,
+        "boxcox_lambda": None, "boxcox_offset": None, "feature_columns": None, "target_col": None,
     })
 
 
@@ -54,10 +54,11 @@ WIDE_INPUT = {
 
 
 def _load(model, model_name="test_model", version="3", stage="Production",
-          boxcox_lambda=None, feature_columns=None, target_col=None):
+          boxcox_lambda=None, boxcox_offset=None, feature_columns=None, target_col=None):
     _model_cache.update({
         "model": model, "model_name": model_name, "model_version": version, "model_stage": stage,
-        "boxcox_lambda": boxcox_lambda, "feature_columns": feature_columns, "target_col": target_col,
+        "boxcox_lambda": boxcox_lambda, "boxcox_offset": boxcox_offset,
+        "feature_columns": feature_columns, "target_col": target_col,
     })
 
 
@@ -158,6 +159,17 @@ class TestPredict:
         data = response.json()
         assert data["prediction_transformed"] == 0.95
         assert data["prediction"] != 0.95  # inverse-transformed to original scale
+
+    def test_predict_inverse_boxcox_subtracts_persisted_offset(self, client, mock_model):
+        """The Box-Cox shift must be subtracted back off at prediction time."""
+        from src.serve import _inverse_boxcox
+
+        _load(mock_model, feature_columns=SMALL_SCHEMA, boxcox_lambda=-0.3, boxcox_offset=1.0)
+
+        response = client.post("/predict", json=SMALL_INPUT)
+        assert response.status_code == 200
+        data = response.json()
+        assert data["prediction"] == pytest.approx(_inverse_boxcox(0.95, -0.3, 1.0))
 
     def test_predict_fails_when_model_not_loaded(self, client):
         response = client.post("/predict", json=SMALL_INPUT)

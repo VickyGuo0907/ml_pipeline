@@ -54,6 +54,7 @@ _model_cache: dict[str, Any] = {
     "model_version": None,
     "model_stage": None,
     "boxcox_lambda": None,
+    "boxcox_offset": None,
     "feature_columns": None,
     "target_col": None,
 }
@@ -93,6 +94,11 @@ def _load_model(model_name: str) -> dict[str, Any] | None:
             if lambda_str is not None:
                 boxcox_lambda = float(lambda_str)
 
+            boxcox_offset: float | None = None
+            offset_str = run.data.params.get("boxcox_offset")
+            if offset_str is not None:
+                boxcox_offset = float(offset_str)
+
             target_col = run.data.params.get("target_col")
 
             feature_columns: list[str] | None = None
@@ -110,9 +116,9 @@ def _load_model(model_name: str) -> dict[str, Any] | None:
                 )
 
             logger.info(
-                "Loaded %s v%s from %s (target_col=%s, %s features, boxcox_lambda=%s)",
+                "Loaded %s v%s from %s (target_col=%s, %s features, boxcox_lambda=%s, boxcox_offset=%s)",
                 model_name, version.version, stage, target_col,
-                len(feature_columns) if feature_columns else "unknown", boxcox_lambda,
+                len(feature_columns) if feature_columns else "unknown", boxcox_lambda, boxcox_offset,
             )
             return {
                 "model": model,
@@ -120,6 +126,7 @@ def _load_model(model_name: str) -> dict[str, Any] | None:
                 "model_version": version.version,
                 "model_stage": stage,
                 "boxcox_lambda": boxcox_lambda,
+                "boxcox_offset": boxcox_offset,
                 "feature_columns": feature_columns,
                 "target_col": target_col,
             }
@@ -131,19 +138,24 @@ def _load_model(model_name: str) -> dict[str, Any] | None:
     return None
 
 
-def _inverse_boxcox(value: float, lam: float) -> float:
+def _inverse_boxcox(value: float, lam: float, offset: float = 0.0) -> float:
     """Inverse Box-Cox transform to return a prediction to its original target scale.
+
+    The forward transform shifted the target by `offset` before Box-Cox, so the
+    inverse must subtract it back off. Older models without a logged offset
+    default to 0.0 (their forward shift was only ~1e-6, a no-op in practice).
 
     Args:
         value: Box-Cox transformed prediction.
         lam: Box-Cox lambda used during feature engineering.
+        offset: Shift applied to the target before Box-Cox (from the manifest).
 
     Returns:
         Prediction in the original target scale (clamped to ≥ 0).
     """
     if lam == 0:
-        return math.exp(value)
-    return max(0.0, (value * lam + 1) ** (1.0 / lam))
+        return math.exp(value) - offset
+    return max(0.0, (value * lam + 1) ** (1.0 / lam) - offset)
 
 
 @asynccontextmanager
@@ -299,8 +311,9 @@ async def predict(data: PredictionInput) -> PredictionOutput:
         raw_prediction = float(_model_cache["model"].predict(input_df)[0])
 
         boxcox_lambda = _model_cache.get("boxcox_lambda")
+        boxcox_offset = _model_cache.get("boxcox_offset") or 0.0
         if boxcox_lambda is not None:
-            prediction_original = _inverse_boxcox(raw_prediction, boxcox_lambda)
+            prediction_original = _inverse_boxcox(raw_prediction, boxcox_lambda, boxcox_offset)
         else:
             prediction_original = raw_prediction
 

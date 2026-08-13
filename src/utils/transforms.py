@@ -30,10 +30,49 @@ def frequency_encode(df: pd.DataFrame, col: str) -> pd.DataFrame:
     return df
 
 
+def fit_boxcox(y: pd.Series) -> dict[str, float]:
+    """Fit Box-Cox parameters (lambda + shift offset) on training data only.
+
+    The offset shifts the series so every value is > 0 before Box-Cox. Fit on
+    the training set and reuse the returned params via apply_boxcox on both
+    train and test so test data never contributes to the fitted statistics.
+
+    Args:
+        y: Training target series (must be numeric).
+
+    Returns:
+        Dict with the fitted "lambda" and "offset".
+    """
+    from scipy.stats import boxcox
+
+    y_arr = y.to_numpy(dtype=float)
+    offset = max(0.0, float(-y_arr.min())) + 1e-6
+    _, lambda_val = boxcox(y_arr + offset)
+    logger.info("Box-Cox fitted: λ=%.4f, offset=%.6f", lambda_val, offset)
+    return {"lambda": float(lambda_val), "offset": float(offset)}
+
+
+def apply_boxcox(y: pd.Series, params: dict[str, float]) -> pd.Series:
+    """Apply a Box-Cox transform previously fitted by fit_boxcox.
+
+    Args:
+        y: Target series to transform (train or test).
+        params: Dict with "lambda" and "offset" as returned by fit_boxcox.
+
+    Returns:
+        Transformed series.
+    """
+    from scipy.stats import boxcox
+
+    transformed = boxcox(y.to_numpy(dtype=float) + params["offset"], lmbda=params["lambda"])
+    return pd.Series(transformed, index=y.index, name=y.name)
+
+
 def boxcox_transform(y: pd.Series) -> tuple[pd.Series, float]:
     """Apply Box-Cox power transform; handles zeros/negatives via offset.
 
-    SVG Stage 2: "Box-Cox transform — λ = -0.3 on target"
+    Convenience single-pass wrapper over fit_boxcox/apply_boxcox for callers
+    that only need the fitted lambda.
 
     Args:
         y: Target series (must be numeric).
@@ -41,14 +80,8 @@ def boxcox_transform(y: pd.Series) -> tuple[pd.Series, float]:
     Returns:
         Tuple of (transformed series, fitted lambda).
     """
-    from scipy.stats import boxcox
-
-    y_arr = y.to_numpy(dtype=float)
-    # Shift to ensure all values > 0
-    offset = max(0.0, float(-y_arr.min())) + 1e-6
-    transformed, lambda_val = boxcox(y_arr + offset)
-    logger.info("Box-Cox fitted: λ=%.4f, offset=%.6f", lambda_val, offset)
-    return pd.Series(transformed, index=y.index, name=y.name), float(lambda_val)
+    params = fit_boxcox(y)
+    return apply_boxcox(y, params), params["lambda"]
 
 
 def compute_vif(X: pd.DataFrame) -> dict[str, float]:

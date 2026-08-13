@@ -15,10 +15,12 @@ from src.utils.config import (
 from src.utils.model_registry import MODEL_REGISTRY, get_model
 from src.utils.transforms import (
     IMPUTE_REGISTRY,
+    apply_boxcox,
     boxcox_transform,
     compute_vif,
     drop_high_vif,
     drop_pattern_columns,
+    fit_boxcox,
     frequency_encode,
     iterative_impute,
     median_impute,
@@ -43,6 +45,8 @@ __all__ = [
     # Transforms
     "IMPUTE_REGISTRY",
     "frequency_encode",
+    "fit_boxcox",
+    "apply_boxcox",
     "boxcox_transform",
     "compute_vif",
     "drop_high_vif",

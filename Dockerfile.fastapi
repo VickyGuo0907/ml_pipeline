@@ -1,0 +1,29 @@
+# FastAPI serving image.
+#
+# Installs the project's actual pinned dependencies from pyproject.toml/uv.lock
+# via `uv export` — same mechanism as Dockerfile.airflow — instead of an
+# unpinned `pip install` list that could drift from what training actually used.
+# apache-airflow and its postgres provider are pruned because the serving
+# process (src/serve.py) has no need for the orchestrator.
+FROM python:3.11-slim
+
+USER root
+
+# libgomp1: LightGBM's OpenMP runtime. curl: healthcheck.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libgomp1 \
+    curl \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+COPY pyproject.toml uv.lock ./
+RUN pip install --no-cache-dir --upgrade "uv>=0.4" \
+    && uv export --no-dev --no-emit-project --prune apache-airflow --prune apache-airflow-providers-postgres --no-header --no-hashes > /tmp/requirements.txt \
+    && pip install --no-cache-dir -r /tmp/requirements.txt \
+    && rm /tmp/requirements.txt
+
+# Compose bind-mounts ${PWD}/src over this path so live edits apply without a rebuild.
+COPY src /app/src
+WORKDIR /app
+
+EXPOSE 8000
+CMD ["python", "-m", "uvicorn", "src.serve:app", "--host", "0.0.0.0", "--port", "8000"]

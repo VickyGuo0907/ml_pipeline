@@ -191,7 +191,9 @@ services:
 
   # FastAPI Serving
   fastapi:
-    image: python:3.11-slim
+    build:
+      context: .
+      dockerfile: Dockerfile.fastapi
     container_name: fastapi-server
     depends_on:
       mlflow-server:
@@ -219,10 +221,7 @@ services:
       # load fail with "Read-only file system", not just the ones that use it.
       - ${PWD}/mlflow-artifacts:/mlflow-artifacts
     working_dir: /app
-    command: >
-      bash -c "apt-get update -qq && apt-get install -y -qq --no-install-recommends libgomp1 curl &&
-      pip install -q uvicorn fastapi requests pydantic mlflow pandas scikit-learn lightgbm &&
-      python -m uvicorn src.serve:app --host 0.0.0.0 --port 8000"
+    command: ["python", "-m", "uvicorn", "src.serve:app", "--host", "0.0.0.0", "--port", "8000"]
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:8000/health || exit 1"]
       interval: 10s

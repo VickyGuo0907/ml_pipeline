@@ -145,13 +145,15 @@ def train_models(
     X_test = test_df.drop(columns=[target_col])
     y_test = test_df[target_col]
 
-    # Read Box-Cox lambda from features manifest so serve.py can inverse-transform predictions
+    # Read Box-Cox params from features manifest so serve.py can inverse-transform predictions
     boxcox_lambda: float | None = None
+    boxcox_offset: float | None = None
     manifest_path = features_path / "manifest.yaml"
     if manifest_path.exists():
         with open(manifest_path) as f:
             manifest = yaml.safe_load(f)
         boxcox_lambda = manifest.get("transform_meta", {}).get("boxcox_lambda")
+        boxcox_offset = manifest.get("transform_meta", {}).get("boxcox_offset")
 
     mlflow.set_tracking_uri(mlflow_tracking_uri)
     training_results: dict[str, Any] = {"run_id": run_id, "models": {}}
@@ -177,6 +179,8 @@ def train_models(
             mlflow.log_dict({"columns": list(X_train.columns)}, "feature_columns.json")
             if boxcox_lambda is not None:
                 mlflow.log_param("boxcox_lambda", boxcox_lambda)
+                if boxcox_offset is not None:
+                    mlflow.log_param("boxcox_offset", boxcox_offset)
             # Cross-validation runs on the training set only, before the final fit,
             # so the held-out test set is never touched during model comparison.
             cv_summary: dict[str, Any] | None = None

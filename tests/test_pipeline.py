@@ -2,6 +2,7 @@
 import tempfile
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -816,8 +817,8 @@ train_test_split: 0.8
             assert (features_dir / run_id / "train.parquet").exists()
             assert (features_dir / run_id / "test.parquet").exists()
 
-    def _run_with_scaler(self, tmpdir: Path, scaler_line: str) -> pd.DataFrame:
-        """Run engineer_features on a fixed skewed column, return the combined scaled output."""
+    def _run_with_scaler(self, tmpdir: Path, scaler_line: str) -> tuple[pd.DataFrame, pd.DataFrame]:
+        """Run engineer_features on a fixed skewed column, return the (train, test) frames."""
         interim_dir = Path(tmpdir) / "interim"
         features_dir = Path(tmpdir) / "features"
         config_dir = Path(tmpdir) / "config"
@@ -867,29 +868,140 @@ train_test_split: 0.8
         engineer_features(interim_dir, features_dir, run_id, config_dir)
         train_df = pd.read_parquet(features_dir / run_id / "train.parquet")
         test_df = pd.read_parquet(features_dir / run_id / "test.parquet")
-        return pd.concat([train_df, test_df])
+        return train_df, test_df
 
     def test_scaler_config_selects_robust_scaler(self, tmp_path):
-        """features.yaml's scaler: robust must actually apply RobustScaler, not StandardScaler."""
+        """features.yaml's scaler: robust must apply RobustScaler, not StandardScaler."""
+        from sklearn.model_selection import train_test_split
         from sklearn.preprocessing import RobustScaler
 
-        combined = self._run_with_scaler(tmp_path, 'scaler: "robust"')
+        train_df, test_df = self._run_with_scaler(tmp_path, 'scaler: "robust"')
 
+        # The scaler must be fit on the training split only and merely applied
+        # to the test split — if test rows leaked into the fit, these differ.
         raw = pd.DataFrame({"volume": [1.0, 2.0, 3.0, 4.0, 100.0]})
-        expected = RobustScaler().fit_transform(raw).flatten()
+        y = pd.DataFrame({"ExcessReadmissionRatio": [0.9, 1.0, 0.8, 1.1, 0.85]})
+        X_train, X_test, _, _ = train_test_split(raw, y, test_size=0.2, random_state=42)
+        scaler = RobustScaler()
+        expected_train = scaler.fit_transform(X_train)
+        expected_test = scaler.transform(X_test)
+        expected = sorted(np.concatenate([expected_train, expected_test]).flatten().tolist())
 
-        assert sorted(combined["volume"].tolist()) == pytest.approx(sorted(expected.tolist()), abs=1e-6)
+        actual = sorted(pd.concat([train_df, test_df])["volume"].tolist())
+        assert actual == pytest.approx(expected, abs=1e-6)
 
     def test_scaler_defaults_to_standard_when_unset(self, tmp_path):
         """Omitting `scaler` must reproduce the pre-existing StandardScaler behavior exactly."""
+        from sklearn.model_selection import train_test_split
         from sklearn.preprocessing import StandardScaler
 
-        combined = self._run_with_scaler(tmp_path, "")
+        train_df, test_df = self._run_with_scaler(tmp_path, "")
 
         raw = pd.DataFrame({"volume": [1.0, 2.0, 3.0, 4.0, 100.0]})
-        expected = StandardScaler().fit_transform(raw).flatten()
+        y = pd.DataFrame({"ExcessReadmissionRatio": [0.9, 1.0, 0.8, 1.1, 0.85]})
+        X_train, X_test, _, _ = train_test_split(raw, y, test_size=0.2, random_state=42)
+        scaler = StandardScaler()
+        expected_train = scaler.fit_transform(X_train)
+        expected_test = scaler.transform(X_test)
+        expected = sorted(np.concatenate([expected_train, expected_test]).flatten().tolist())
 
-        assert sorted(combined["volume"].tolist()) == pytest.approx(sorted(expected.tolist()), abs=1e-6)
+        actual = sorted(pd.concat([train_df, test_df])["volume"].tolist())
+        assert actual == pytest.approx(expected, abs=1e-6)
+
+    def test_encoders_fit_on_train_only_no_leakage(self, tmp_path):
+        """Encoders must fit on train only; a test-only category encodes to the unknown bucket."""
+        import yaml
+
+        interim_dir = Path(tmp_path) / "interim"
+        features_dir = Path(tmp_path) / "features"
+        config_dir = Path(tmp_path) / "config"
+        interim_dir.mkdir(); features_dir.mkdir(); config_dir.mkdir()
+
+        run_id = "2026-05-18"
+        df = pd.DataFrame({
+            "State": ["NY", "CA", "TX", "FL", "WA"],  # one value appears only in the test split
+            "volume": [1.0, 2.0, 3.0, 4.0, 5.0],
+            "ExcessReadmissionRatio": [0.9, 1.0, 0.8, 1.1, 0.85],
+        })
+        csv_path = interim_dir / run_id
+        csv_path.mkdir(parents=True)
+        df.to_csv(csv_path / "test.csv", index=False)
+        with open(csv_path / "manifest.yaml", "w") as f:
+            yaml.dump({"files": {"test.csv": {}}}, f)
+
+        (config_dir / "pipeline.yaml").write_text("""
+sources:
+  - name: test
+    path: data/landing
+    format: csv
+target:
+  name: ExcessReadmissionRatio
+  type: continuous
+problem_type: regression
+train_test_split: 0.8
+random_state: 42
+""")
+        (config_dir / "features.yaml").write_text("""
+encoding:
+  State: label
+nzv_threshold: 0.99
+drop_columns: []
+scale: false
+""")
+        (config_dir / "models.yaml").write_text("""
+models:
+  - name: linear_baseline
+    type: linear
+    hyperparameters: {}
+random_state: 42
+train_test_split: 0.8
+""")
+
+        engineer_features(interim_dir, features_dir, run_id, config_dir)
+        train_df = pd.read_parquet(features_dir / run_id / "train.parquet")
+        test_df = pd.read_parquet(features_dir / run_id / "test.parquet")
+
+        # 5 rows → 4 train / 1 test. The encoder saw only the 4 train labels, so
+        # whatever state landed in test must map to the unknown bucket (== n_train_classes),
+        # never to a training label.
+        train_labels = set(train_df["State"])
+        test_labels = set(test_df["State"])
+        assert len(train_labels) == 4  # all 4 training categories distinct
+        assert len(test_df) == 1
+        assert test_df["State"].iloc[0] not in train_labels  # unknown bucket, no leakage
+
+
+class TestBoxCox:
+    """Tests for the fit-on-train Box-Cox transform and its offset handling."""
+
+    def test_fit_apply_boxcox_roundtrips_with_offset(self):
+        """fit_boxcox + apply_boxcox must match scipy directly and invert exactly."""
+        from scipy.stats import boxcox
+
+        from src.utils.transforms import apply_boxcox, fit_boxcox
+
+        y = pd.Series([1.0, 2.0, 3.0, 4.0, 100.0])
+        params = fit_boxcox(y)
+
+        transformed = apply_boxcox(y, params)
+        expected = boxcox(y.to_numpy(dtype=float) + params["offset"], lmbda=params["lambda"])
+        assert transformed.to_numpy() == pytest.approx(expected)
+
+        # Inverse of forward (y + offset -> boxcox) must recover y exactly when
+        # the same lambda AND offset are subtracted — proving the offset is what
+        # serve.py must persist to invert predictions faithfully.
+        back = (
+            (transformed.to_numpy() * params["lambda"] + 1) ** (1.0 / params["lambda"])
+            - params["offset"]
+        )
+        assert back == pytest.approx(y.to_numpy(), abs=1e-6)
+
+    def test_fit_boxcox_reports_offset_for_nonpositive_target(self):
+        """A target with zeros/negatives must produce a positive shift offset."""
+        from src.utils.transforms import fit_boxcox
+
+        params = fit_boxcox(pd.Series([0.0, 0.5, 1.0, -2.0, 3.0]))
+        assert params["offset"] > 2.0  # max(0, -min) + 1e-6 = 2.0 + 1e-6
 
 
 _PIVOT_JOIN_PIPELINE_YAML = """\
@@ -1214,6 +1326,12 @@ class TestHospitalReadmissionLaggedIntegration:
                 "Facility ID", "Measure Name",
             }
             assert not leakage_columns & set(combined.columns)
+
+            # Train and test must share the exact same columns (same order too) —
+            # a transform fitted/dropped on train alone (e.g. NZV) leaves test with
+            # unseen-at-fit-time features and breaks model.predict. This is what the
+            # DAG's 07_train_models task trips on, so it's asserted at the boundary.
+            assert list(train_df.columns) == list(test_df.columns)
 
             # Sanity: the direct-joined Hospital_General_Information source actually contributed.
             assert "Hospital Ownership" in combined.columns

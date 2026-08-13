@@ -11,9 +11,9 @@ from sklearn.preprocessing import LabelEncoder, RobustScaler, StandardScaler
 from src.utils.config import JoinStrategyConfig, load_features_config, load_pipeline_config
 from src.utils.io import READERS, load_manifest, resolve_run_path, write_manifest
 from src.utils.transforms import (
-    boxcox_transform,
+    apply_boxcox,
     drop_high_vif,
-    frequency_encode,
+    fit_boxcox,
 )
 
 logger = logging.getLogger(__name__)
@@ -27,28 +27,88 @@ SCALER_REGISTRY: dict[str, type] = {
 }
 
 
-def _encode_columns(df: pd.DataFrame, encoding_map: dict[str, str]) -> pd.DataFrame:
-    """Apply per-column encoding strategy from config.
+def _fit_encoders(df: pd.DataFrame, encoding_map: dict[str, str]) -> dict[str, Any]:
+    """Fit per-column encoding strategies on training data only.
+
+    Fitting statistics (category counts for frequency, class tables for label)
+    must come from the training set alone so no test information leaks into the
+    encoded feature values.
 
     Supports: frequency | label. Unknown strategies fall back to label.
 
     Args:
-        df: Input DataFrame.
+        df: Training DataFrame.
         encoding_map: Maps column name → strategy string.
 
     Returns:
-        DataFrame with encoded columns (originals replaced).
+        Mapping of column name → (strategy, fitted artifact), where the artifact
+        is a {category: count} dict (frequency) or a fitted LabelEncoder (label).
     """
+    fitted: dict[str, Any] = {}
     for col, strategy in encoding_map.items():
         if col not in df.columns:
             continue
         if strategy == "frequency":
-            df = frequency_encode(df, col)
-            logger.info("Frequency-encoded '%s'", col)
+            fitted[col] = ("frequency", df[col].value_counts().to_dict())
         else:  # label or unknown → LabelEncoder
             le = LabelEncoder()
-            df[col] = le.fit_transform(df[col].astype(str))
-            logger.info("Label-encoded '%s'", col)
+            le.fit(df[col].astype(str))
+            fitted[col] = ("label", le)
+    return fitted
+
+
+def _apply_encoders(df: pd.DataFrame, fitted: dict[str, Any]) -> pd.DataFrame:
+    """Apply previously fitted encoders to a DataFrame (train or test).
+
+    Categories unseen during fitting are mapped to 0 (frequency) or a reserved
+    unknown class (label) instead of raising.
+
+    Args:
+        df: DataFrame to encode.
+        fitted: Mapping from _fit_encoders.
+
+    Returns:
+        Copy of df with encoded columns (originals replaced).
+    """
+    df = df.copy()
+    for col, (strategy, artifact) in fitted.items():
+        if col not in df.columns:
+            continue
+        if strategy == "frequency":
+            df[col] = df[col].map(artifact).fillna(0).astype(int)
+        else:
+            lookup = {category: i for i, category in enumerate(artifact.classes_)}
+            df[col] = df[col].astype(str).map(lookup).fillna(len(artifact.classes_)).astype(int)
+    return df
+
+
+def _fit_medians(df: pd.DataFrame) -> dict[str, float]:
+    """Compute column medians on training data for later imputation.
+
+    Args:
+        df: Training DataFrame.
+
+    Returns:
+        Mapping of column name → median for numeric columns containing NaN.
+    """
+    numeric_cols = df.select_dtypes(include="number").columns
+    return {c: df[c].median() for c in numeric_cols if df[c].isna().any()}
+
+
+def _apply_medians(df: pd.DataFrame, medians: dict[str, float]) -> pd.DataFrame:
+    """Impute NaN values in a DataFrame using train-fitted column medians.
+
+    Args:
+        df: DataFrame to impute (train or test).
+        medians: Mapping from _fit_medians.
+
+    Returns:
+        Copy of df with NaN values filled.
+    """
+    df = df.copy()
+    for col, median in medians.items():
+        if col in df.columns:
+            df[col] = df[col].fillna(median)
     return df
 
 
@@ -164,8 +224,14 @@ def _pivot_join_sources(interim_path: Path, join_config: JoinStrategyConfig) -> 
     return result
 
 
-def _apply_nzv_filter(df: pd.DataFrame, threshold: float, exclude_cols: list[str]) -> pd.DataFrame:
-    """Drop near-zero variance columns (excluding specified cols).
+def _apply_nzv_filter(
+    df: pd.DataFrame, threshold: float, exclude_cols: list[str]
+) -> tuple[pd.DataFrame, list[str]]:
+    """Compute and drop near-zero variance columns (excluding specified cols).
+
+    Returns the dropped column names so callers can apply the identical drop
+    set to a paired frame (e.g. the test split) — dropping from train alone
+    would leave train/test with different columns and break model scoring.
 
     Args:
         df: Feature DataFrame.
@@ -173,7 +239,7 @@ def _apply_nzv_filter(df: pd.DataFrame, threshold: float, exclude_cols: list[str
         exclude_cols: Columns to protect from removal (e.g. target).
 
     Returns:
-        DataFrame with NZV columns removed.
+        Tuple of (df with NZV columns removed, list of dropped column names).
     """
     to_drop = []
     for col in df.columns:
@@ -184,7 +250,7 @@ def _apply_nzv_filter(df: pd.DataFrame, threshold: float, exclude_cols: list[str
             to_drop.append(col)
     if to_drop:
         logger.info("NZV filter dropped %d columns: %s", len(to_drop), to_drop)
-    return df.drop(columns=to_drop)
+    return df.drop(columns=to_drop), to_drop
 
 
 def engineer_features(
@@ -196,7 +262,12 @@ def engineer_features(
     """Engineer features from cleaned data.
 
     Pipeline (SVG Stages 1–2):
-      encode → drop cols → NZV filter → Box-Cox target → VIF prune → scale → split
+      drop cols → split → encode → NZV filter → median impute →
+      Box-Cox target → VIF prune → scale
+
+    The train/test split happens first so every fitted statistic (encoding
+    maps, medians, Box-Cox λ/offset, VIF, scaler) is computed on the training
+    set only and merely applied to the test set — preventing data leakage.
 
     Args:
         interim_dir: Directory containing cleaned interim data.
@@ -235,60 +306,90 @@ def engineer_features(
             raise FileNotFoundError(f"No supported files found in {interim_path}. Supported: {supported}")
         df = pd.concat(dfs, axis=0, ignore_index=True)
 
-    # Encode categorical columns per config strategy
-    df = _encode_columns(df, features_config.encoding)
-
-    # Drop explicitly excluded columns
+    # Drop explicitly excluded columns (config-driven, no data statistics involved)
     df = df.drop(columns=features_config.drop_columns, errors="ignore")
 
-    # Drop rows with missing target
+    # Drop rows with missing target — must happen before the split
     df = df.dropna(subset=[target_col])
 
-    # NZV filter (protects target column)
-    df = _apply_nzv_filter(df, features_config.nzv_threshold, exclude_cols=[target_col])
+    # Split FIRST, before any statistic-fitting transform, so no test
+    # information leaks into fitted parameters (encoders, medians, λ, scaler).
+    X = df.drop(columns=[target_col])
+    y = df[target_col]
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y,
+        test_size=1 - pipeline_config.train_test_split,
+        random_state=pipeline_config.random_state,
+    )
+    X_train = X_train.copy()
+    X_test = X_test.copy()
 
-    # Replace inf with NaN, then fill NaN with column median
-    numeric_cols = df.select_dtypes(include="number").columns
-    df[numeric_cols] = df[numeric_cols].replace([np.inf, -np.inf], np.nan)
-    df[numeric_cols] = df[numeric_cols].fillna(df[numeric_cols].median())
+    # Encode categorical columns — encoders fit on train only, applied to both
+    fitted_encoders = _fit_encoders(X_train, features_config.encoding)
+    if fitted_encoders:
+        X_train = _apply_encoders(X_train, fitted_encoders)
+        X_test = _apply_encoders(X_test, fitted_encoders)
+        for col in features_config.encoding:
+            if col in X_train.columns:
+                logger.info("Encoded '%s' (%s)", col, features_config.encoding[col])
 
-    # Drop columns that are still all-NaN (median was NaN, fill did nothing)
+    # NZV filter — drop set computed on train, applied to both frames so train
+    # and test keep identical columns
+    X_train, nzv_dropped = _apply_nzv_filter(X_train, features_config.nzv_threshold, exclude_cols=[])
+    if nzv_dropped:
+        X_test = X_test.drop(columns=nzv_dropped)
+
+    # Replace inf with NaN in both frames, then median-impute with train-fitted medians
+    for frame in (X_train, X_test):
+        numeric_cols = frame.select_dtypes(include="number").columns
+        frame[numeric_cols] = frame[numeric_cols].replace([np.inf, -np.inf], np.nan)
+    medians = _fit_medians(X_train)
+    X_train = _apply_medians(X_train, medians)
+    X_test = _apply_medians(X_test, medians)
+
+    # Drop columns that are all-NaN in train (median was NaN, fill did nothing)
     all_nan_cols = [
-        col for col in df.select_dtypes(include="number").columns if df[col].isna().all()
+        col for col in X_train.select_dtypes(include="number").columns if X_train[col].isna().all()
     ]
     if all_nan_cols:
         logger.warning("Dropping %d all-NaN columns after imputation: %s", len(all_nan_cols), all_nan_cols)
-        df = df.drop(columns=all_nan_cols)
+        X_train = X_train.drop(columns=all_nan_cols)
+        X_test = X_test.drop(columns=all_nan_cols)
 
     transform_meta: dict[str, Any] = {}
 
-    # SVG Stage 2: Box-Cox transform on target
+    # SVG Stage 2: Box-Cox transform on target — λ + offset fit on train,
+    # applied to both. Offset is persisted so serve.py can invert it exactly.
     if features_config.boxcox_target:
-        df[target_col], lambda_val = boxcox_transform(df[target_col])
-        transform_meta["boxcox_lambda"] = lambda_val
-        logger.info("Applied Box-Cox to target '%s': λ=%.4f", target_col, lambda_val)
+        boxcox_params = fit_boxcox(y_train)
+        y_train = apply_boxcox(y_train, boxcox_params)
+        y_test = apply_boxcox(y_test, boxcox_params)
+        transform_meta["boxcox_lambda"] = boxcox_params["lambda"]
+        transform_meta["boxcox_offset"] = boxcox_params["offset"]
+        logger.info(
+            "Applied Box-Cox to target '%s': λ=%.4f offset=%.6f",
+            target_col, boxcox_params["lambda"], boxcox_params["offset"],
+        )
 
-    # Final sweep: drop any predictor column still carrying NaN or inf before split.
-    # Catches non-numeric columns not in encoding_map and any edge cases above missed.
-    predictor_cols = [c for c in df.columns if c != target_col]
+    # Final sweep: drop any predictor column still carrying NaN or inf. Catches
+    # non-numeric columns not in encoding_map and any edge cases above missed.
+    # Drop set is computed on train and applied to both frames.
     final_bad = [
-        c for c in predictor_cols
-        if df[c].isna().any() or (df[c].dtype.kind in "fc" and np.isinf(df[c]).any())
+        c for c in X_train.columns
+        if X_train[c].isna().any() or (X_train[c].dtype.kind in "fc" and np.isinf(X_train[c]).any())
     ]
     if final_bad:
         logger.warning(
-            "Final cleanup: dropping %d columns with NaN/inf before split: %s",
+            "Final cleanup: dropping %d columns with NaN/inf before scaling: %s",
             len(final_bad), final_bad,
         )
-        df = df.drop(columns=final_bad)
+        X_train = X_train.drop(columns=final_bad)
+        X_test = X_test.drop(columns=final_bad)
 
-    X = df.drop(columns=[target_col])
-    y = df[target_col]
-
-    # SVG Stage 2: VIF pruning on predictor matrix
+    # SVG Stage 2: VIF pruning on training predictor matrix
     vif_dropped: list[str] = []
     if features_config.vif_threshold is not None:
-        numeric_X = X.select_dtypes(include="number")
+        numeric_X = X_train.select_dtypes(include="number")
         # Guard: drop any column still carrying NaN or inf before passing to statsmodels
         bad_cols = numeric_X.columns[
             numeric_X.isin([np.inf, -np.inf]).any() | numeric_X.isna().any()
@@ -296,26 +397,22 @@ def engineer_features(
         if bad_cols:
             logger.warning("Dropping %d columns with NaN/inf before VIF: %s", len(bad_cols), bad_cols)
             numeric_X = numeric_X.drop(columns=bad_cols)
-            X = X.drop(columns=bad_cols)
+            X_train = X_train.drop(columns=bad_cols)
+            X_test = X_test.drop(columns=bad_cols)
         if not numeric_X.empty:
             pruned, vif_dropped = drop_high_vif(numeric_X, features_config.vif_threshold)
-            X = X.drop(columns=vif_dropped)
+            X_train = X_train.drop(columns=vif_dropped)
+            X_test = X_test.drop(columns=vif_dropped)
             transform_meta["vif_dropped"] = vif_dropped
 
-    # SVG Stage 2: Center & scale numeric features
+    # SVG Stage 2: Center & scale numeric features — scaler fit on train only
     if features_config.scale:
-        numeric_cols = X.select_dtypes(include="number").columns.tolist()
+        numeric_cols = X_train.select_dtypes(include="number").columns.tolist()
         if numeric_cols:
             scaler_cls = SCALER_REGISTRY.get(features_config.scaler, StandardScaler)
             scaler = scaler_cls()
-            X[numeric_cols] = scaler.fit_transform(X[numeric_cols])
-
-    # Train/test split
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y,
-        test_size=1 - pipeline_config.train_test_split,
-        random_state=pipeline_config.random_state,
-    )
+            X_train[numeric_cols] = scaler.fit_transform(X_train[numeric_cols])
+            X_test[numeric_cols] = scaler.transform(X_test[numeric_cols])
 
     train_df = X_train.copy()
     train_df[target_col] = y_train
