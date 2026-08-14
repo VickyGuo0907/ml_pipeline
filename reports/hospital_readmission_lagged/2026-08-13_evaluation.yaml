@@ -1,0 +1,168 @@
+run_id: '2026-08-13'
+evaluated_at: '2026-08-13T18:37:12.267355+00:00'
+thresholds:
+  min_test_r2: 0.0
+  max_test_rmse: 0.12
+models:
+  hospital_readmission_lagged_elastic_net:
+    status: registered
+    version: '9'
+    test_r2: 0.047167355056630056
+    train_r2: 0.09034599386596431
+    test_rmse: 0.06520752601223204
+    train_rmse: 0.060231254363644536
+    test_rmse_ci:
+    - 0.06123044972690148
+    - 0.0694150930979887
+    test_r2_ci:
+    - 0.02054214747398457
+    - 0.06864814958276017
+    drift_detected: false
+    cross_validation:
+      strategy: grouped_kfold[State]
+      folds: 5
+      cv_r2_mean: 0.05965924816442405
+      cv_r2_std: 0.013535913615508448
+      cv_rmse_mean: 0.06094275592511911
+      cv_r2_per_fold:
+      - 0.075602
+      - 0.05342
+      - 0.072903
+      - 0.038585
+      - 0.057785
+    residual_diagnostics:
+      durbin_watson: 2.0024882077722186
+      breusch_pagan_p: 0.6268647079808338
+      shapiro_p: 0.030631594062571054
+      jarque_bera_p: 0.052210502759724074
+      resid_skew: -0.16519425002832241
+      resid_kurtosis: 0.387203913058491
+    feature_importance:
+      source: coef_
+      n_nonzero: 18
+      n_features: 73
+      top:
+      - feature: Hospital overall rating
+        value: -0.009445
+      - feature: MORT_30_HF
+        value: -0.005048
+      - feature: Discharge information
+        value: -0.002826
+      - feature: Doctor communication
+        value: -0.002031
+      - feature: State
+        value: 0.001627
+      - feature: HCP_COVID_19
+        value: 0.001008
+      - feature: STK_03
+        value: 0.000633
+      - feature: STK_05
+        value: -0.000365
+      - feature: MORT_30_COPD
+        value: -0.000349
+      - feature: OP_40
+        value: 0.000335
+  hospital_readmission_lagged_random_forest:
+    status: registered
+    version: '9'
+    test_r2: 0.04732590691042293
+    train_r2: 0.8709500285227592
+    test_rmse: 0.06520210050319039
+    train_rmse: 0.0226862516892848
+    test_rmse_ci:
+    - 0.06123395439467668
+    - 0.06930068371681948
+    test_r2_ci:
+    - 0.0013379031783925135
+    - 0.08671279699016259
+    drift_detected: false
+    cross_validation:
+      strategy: grouped_kfold[State]
+      folds: 5
+      cv_r2_mean: 0.06488522101803418
+      cv_r2_std: 0.02626802221434449
+      cv_rmse_mean: 0.06077019611757924
+      cv_r2_per_fold:
+      - 0.115905
+      - 0.048956
+      - 0.063433
+      - 0.051636
+      - 0.044497
+    feature_importance:
+      source: feature_importances_
+      n_nonzero: 73
+      n_features: 73
+      top:
+      - feature: MORT_30_HF
+        value: 0.028183
+      - feature: State
+        value: 0.026663
+      - feature: MORT_30_COPD
+        value: 0.025437
+      - feature: Hospital overall rating
+        value: 0.022073
+      - feature: OP_18c
+        value: 0.020949
+      - feature: PSI_04
+        value: 0.020599
+      - feature: Discharge information
+        value: 0.020496
+      - feature: PSI_11
+        value: 0.020301
+      - feature: MORT_30_STK
+        value: 0.020285
+      - feature: PSI_03
+        value: 0.019739
+  hospital_readmission_lagged_lightgbm_gbm:
+    status: registered
+    version: '9'
+    test_r2: 0.08923445885942682
+    train_r2: 0.6211155658657088
+    test_rmse: 0.06375183717468674
+    train_rmse: 0.03887202552350745
+    test_rmse_ci:
+    - 0.059828968112236994
+    - 0.06789228282533806
+    test_r2_ci:
+    - 0.027088420098191672
+    - 0.1456213002302335
+    drift_detected: false
+    cross_validation:
+      strategy: grouped_kfold[State]
+      folds: 5
+      cv_r2_mean: 0.05796867687972209
+      cv_r2_std: 0.04422390510275224
+      cv_rmse_mean: 0.060965741769567615
+      cv_r2_per_fold:
+      - 0.139449
+      - 0.006511
+      - 0.058628
+      - 0.045853
+      - 0.039403
+    feature_importance:
+      source: feature_importances_
+      n_nonzero: 72
+      n_features: 73
+      top:
+      - feature: Hospital overall rating
+        value: 94.0
+      - feature: MORT_30_HF
+        value: 91.0
+      - feature: PSI_13
+        value: 89.0
+      - feature: HCP_COVID_19
+        value: 84.0
+      - feature: State
+        value: 81.0
+      - feature: MORT_30_COPD
+        value: 73.0
+      - feature: PSI_04
+        value: 68.0
+      - feature: PSI_14
+        value: 66.0
+      - feature: PSI_11
+        value: 62.0
+      - feature: PSI_10
+        value: 58.0
+run_champion: hospital_readmission_lagged_random_forest
+champion_metric: cv_r2
