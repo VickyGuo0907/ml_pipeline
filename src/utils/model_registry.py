@@ -2,7 +2,7 @@
 from typing import Any
 
 from lightgbm import LGBMRegressor
-from sklearn.ensemble import RandomForestRegressor
+from sklearn.ensemble import HistGradientBoostingRegressor, RandomForestRegressor
 from sklearn.linear_model import ElasticNet, Lasso, LinearRegression, Ridge
 
 # Map config `type` strings to sklearn-compatible estimator classes.
@@ -14,6 +14,11 @@ MODEL_REGISTRY: dict[str, type] = {
     "elastic_net": ElasticNet,
     "random_forest": RandomForestRegressor,
     "gbm": LGBMRegressor,
+    # sklearn's own histogram-based booster. Distinct from LGBMRegressor in
+    # implementation and defaults, and it exposes an explicit l2_regularization
+    # term, which makes it a better subject for tuning on a weak-signal problem
+    # than LightGBM's larger, more loosely coupled parameter surface.
+    "hist_gbm": HistGradientBoostingRegressor,
 }
 
 

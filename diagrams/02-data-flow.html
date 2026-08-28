@@ -664,7 +664,7 @@
         <rect x="384.15" y="174" width="75.7" height="16" rx="4" class="c-mask"/>
         <text x="422" y="185" class="t-backend" font-size="8" text-anchor="middle">clean + dedup</text>
         <rect x="596.7" y="174" width="80.60000000000001" height="16" rx="4" class="c-mask"/>
-        <text x="637" y="185" class="t-backend" font-size="8" text-anchor="middle">encode + split</text>
+        <text x="637" y="185" class="t-backend" font-size="8" text-anchor="middle">split → encode</text>
         <rect x="709.6" y="193" width="70.80000000000001" height="16" rx="4" class="c-mask"/>
         <text x="745" y="204" class="t-muted" font-size="8" text-anchor="middle">schema check</text>
         <rect x="785.1" y="309" width="119.80000000000001" height="27" rx="4" class="c-mask"/>
@@ -721,6 +721,18 @@
         <ul>
           <li>&bull; raw/, interim/, features/, and benchmark/ all write manifest.yaml</li>
           <li>&bull; Checksums + row counts make every stage auditable</li>
+        </ul>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <div class="card-dot cyan"></div>
+          <h3>The split comes first</h3>
+        </div>
+        <ul>
+          <li>&bull; feature_engineer splits before fitting anything, then fits encoders, medians, Box-Cox &lambda;/offset, VIF and the scaler on train alone</li>
+          <li>&bull; Those fitted parameters are applied to test unchanged &mdash; test rows never influence a transform applied to them</li>
+          <li>&bull; Every column drop (NZV, all-NaN, VIF) is decided on train and applied to both, so the two frames keep identical columns</li>
         </ul>
       </div>
 

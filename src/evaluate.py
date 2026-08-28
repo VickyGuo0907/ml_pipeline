@@ -51,6 +51,38 @@ def _ci_pair(metrics: dict[str, Any], prefix: str) -> list[float] | None:
     return None
 
 
+def _tuning_summary(metrics: dict[str, Any], params: dict[str, Any]) -> dict[str, Any] | None:
+    """Read hyperparameter search results logged by src/train.py, if present.
+
+    Recorded in the evaluation report so the tuned configuration is visible
+    beside the score it produced. Without this, a reader comparing two runs
+    could not tell whether a metric moved because the data changed or because
+    the hyperparameters did.
+
+    Args:
+        metrics: run.data.metrics dict.
+        params: run.data.params dict (holds `tuned` and the `best_*` entries).
+
+    Returns:
+        Dict with the winning parameters and the CV score that selected them,
+        or None if the run was not tuned.
+    """
+    if params.get("tuned") != "True":
+        return None
+    best = {
+        key[len("best_"):]: value
+        for key, value in params.items()
+        if key.startswith("best_")
+    }
+    if not best:
+        return None
+    summary: dict[str, Any] = {"best_params": best}
+    score = metrics.get("tuning_best_cv_score")
+    if score is not None:
+        summary["best_cv_score"] = score
+    return summary
+
+
 def _cv_summary(metrics: dict[str, Any], params: dict[str, Any]) -> dict[str, Any] | None:
     """Read cross-validation results logged by src/train.py, if present.
 
@@ -549,6 +581,9 @@ def register_models_to_mlflow(
                 report["models"][model_name].update(regression_info)
             if drift_detected is not None:
                 report["models"][model_name]["drift_detected"] = drift_detected
+            tune_block = _tuning_summary(metrics, run_params)
+            if tune_block is not None:
+                report["models"][model_name]["tuning"] = tune_block
             cv_block = _cv_summary(metrics, run_params)
             if cv_block is not None:
                 report["models"][model_name]["cross_validation"] = cv_block

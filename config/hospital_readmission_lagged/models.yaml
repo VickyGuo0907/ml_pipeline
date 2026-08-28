@@ -63,6 +63,49 @@ feature_importance:
   enabled: true
   top_n: 10
 
+# Randomised hyperparameter search, scored on the SAME State-grouped folds used for
+# model comparison above. Two reasons for randomised rather than exhaustive search:
+# the grouped CV spreads (0.014-0.044 R²) are wider than the differences a fine grid
+# would resolve, so most of an exhaustive budget would be spent distinguishing noise;
+# and sampling covers more of each space for the same number of fits. Candidate
+# sampling is seeded by random_state, so the search is reproducible.
+#
+# The search sees X_train only — the hold-out set is never scored during tuning, and
+# grouping is inherited from cross_validation.group_column so a hyperparameter cannot
+# win by exploiting same-state similarity across folds.
+#
+# Search spaces are keyed by model `type`. Ranges bracket the previously hardcoded
+# values rather than starting from scratch, so the tuned result is directly comparable
+# to the untuned baseline in the evaluation report.
+tuning:
+  enabled: true
+  n_iter: 30
+  folds: 5
+  scoring: "r2"
+  param_distributions:
+    elastic_net:
+      alpha: [0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0]
+      l1_ratio: [0.1, 0.3, 0.5, 0.7, 0.9, 1.0]
+      max_iter: [2000, 5000]
+    random_forest:
+      n_estimators: [100, 200, 400]
+      max_depth: [4, 6, 8, 12, null]
+      min_samples_leaf: [1, 5, 10, 20]
+      max_features: ["sqrt", "log2", 0.3]
+    gbm:
+      n_estimators: [100, 200, 400]
+      learning_rate: [0.01, 0.03, 0.05, 0.1]
+      num_leaves: [15, 31, 63]
+      min_child_samples: [10, 20, 40]
+      subsample: [0.6, 0.8, 1.0]
+      reg_lambda: [0.0, 1.0, 5.0, 10.0]
+    hist_gbm:
+      learning_rate: [0.01, 0.03, 0.05, 0.1]
+      max_iter: [100, 200, 400]
+      max_leaf_nodes: [15, 31, 63]
+      min_samples_leaf: [10, 20, 40]
+      l2_regularization: [0.0, 0.1, 1.0, 10.0]
+
 models:
   - name: "hospital_readmission_lagged_elastic_net"
     type: "elastic_net"
@@ -93,3 +136,19 @@ models:
       reg_lambda: 1.0
       random_state: 42
       n_jobs: -1
+
+  # Fourth model, added for the tuning deliverable. sklearn's own histogram-based
+  # booster: a different implementation from LightGBM (binning strategy, growth policy
+  # and defaults all differ) with an explicit l2_regularization term, which makes it a
+  # more informative subject for a regularisation sweep on a weak-signal target.
+  # Hyperparameters below are sklearn defaults, so the untuned row in the report is a
+  # genuine out-of-the-box baseline rather than a hand-picked starting point.
+  - name: "hospital_readmission_lagged_hist_gbm"
+    type: "hist_gbm"
+    hyperparameters:
+      learning_rate: 0.1
+      max_iter: 100
+      max_leaf_nodes: 31
+      min_samples_leaf: 20
+      l2_regularization: 0.0
+      random_state: 42

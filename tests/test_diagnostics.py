@@ -242,3 +242,124 @@ def test_feature_importance_config_defaults_to_disabled():
     cfg = FeatureImportanceConfig()
     assert cfg.enabled is False
     assert cfg.top_n == 10
+
+
+# --------------------------- hyperparameter tuning ---------------------------
+
+from sklearn.linear_model import Ridge  # noqa: E402
+
+from src.utils.config import TuningConfig  # noqa: E402
+from src.utils.diagnostics import tune_model  # noqa: E402
+
+
+def test_tuning_returns_best_params_and_unfitted_estimator():
+    X, y = _linear_data()
+    tuned, summary = tune_model(
+        Ridge(), X, y,
+        param_distributions={"alpha": [0.01, 1.0, 100.0]},
+        n_iter=3, folds=3,
+    )
+    assert summary["best_params"]["alpha"] in (0.01, 1.0, 100.0)
+    assert summary["n_candidates"] == 3
+    assert tuned.get_params()["alpha"] == summary["best_params"]["alpha"]
+    # Returned estimator must be unfitted — the caller controls the final fit.
+    with pytest.raises(Exception):
+        tuned.predict(X)
+
+
+def test_tuning_picks_the_better_alpha_on_clean_linear_data():
+    """With a strong linear signal, heavy regularization should lose."""
+    X, y = _linear_data()
+    _, summary = tune_model(
+        Ridge(), X, y,
+        param_distributions={"alpha": [0.01, 10000.0]},
+        n_iter=2, folds=3,
+    )
+    assert summary["best_params"]["alpha"] == 0.01
+
+
+def test_tuning_does_not_mutate_caller_model():
+    X, y = _linear_data()
+    model = Ridge(alpha=1.0)
+    tune_model(model, X, y, param_distributions={"alpha": [0.01, 100.0]}, n_iter=2, folds=3)
+    assert model.get_params()["alpha"] == 1.0
+
+
+def test_tuning_uses_grouped_folds_when_group_column_given():
+    X, y = _linear_data()
+    _, summary = tune_model(
+        Ridge(), X, y,
+        param_distributions={"alpha": [0.01, 1.0]},
+        n_iter=2, folds=3, group_column="group",
+    )
+    assert summary["strategy"] == "grouped_kfold[group]"
+
+
+def test_tuning_caps_n_iter_at_space_size():
+    """A space smaller than n_iter should be searched exhaustively, not resampled."""
+    X, y = _linear_data()
+    _, summary = tune_model(
+        Ridge(), X, y,
+        param_distributions={"alpha": [0.1, 1.0]},
+        n_iter=50, folds=3,
+    )
+    assert summary["space_size"] == 2
+    assert summary["n_candidates"] == 2
+
+
+def test_tuning_rejects_empty_search_space():
+    X, y = _linear_data()
+    with pytest.raises(ValueError, match="param_distributions is empty"):
+        tune_model(Ridge(), X, y, param_distributions={}, folds=3)
+
+
+def test_tuning_is_reproducible_under_a_fixed_seed():
+    X, y = _linear_data()
+    space = {"alpha": [0.01, 0.1, 1.0, 10.0, 100.0]}
+    _, a = tune_model(Ridge(), X, y, param_distributions=space, n_iter=3, folds=3, random_state=7)
+    _, b = tune_model(Ridge(), X, y, param_distributions=space, n_iter=3, folds=3, random_state=7)
+    assert a["best_params"] == b["best_params"]
+    assert a["best_score"] == pytest.approx(b["best_score"])
+
+
+def test_tuning_summary_is_yaml_serializable():
+    """numpy scalars in best_params would break the evaluation report dump."""
+    import yaml
+    X, y = _linear_data()
+    _, summary = tune_model(
+        Ridge(), X, y,
+        param_distributions={"alpha": [0.01, 1.0]}, n_iter=2, folds=3,
+    )
+    yaml.safe_dump(summary)
+
+
+# --------------------------- tuning config ---------------------------
+
+def test_tuning_defaults_to_disabled():
+    cfg = ModelsConfig(models=[{"name": "m", "type": "ols"}])
+    assert cfg.tuning.enabled is False
+    assert cfg.tuning.param_distributions == {}
+    assert cfg.tuning.n_iter == 25
+    assert cfg.tuning.scoring == "r2"
+
+
+def test_tuning_config_rejects_single_fold():
+    with pytest.raises(ValueError):
+        TuningConfig(folds=1)
+
+
+def test_tuning_config_rejects_zero_iterations():
+    with pytest.raises(ValueError):
+        TuningConfig(n_iter=0)
+
+
+# --------------------------- new model type ---------------------------
+
+def test_hist_gbm_is_registered_and_constructible():
+    from sklearn.ensemble import HistGradientBoostingRegressor
+
+    from src.utils.model_registry import MODEL_REGISTRY, get_model
+    assert "hist_gbm" in MODEL_REGISTRY
+    model = get_model("hist_gbm", {"learning_rate": 0.05, "max_iter": 50})
+    assert isinstance(model, HistGradientBoostingRegressor)
+    assert model.get_params()["learning_rate"] == 0.05

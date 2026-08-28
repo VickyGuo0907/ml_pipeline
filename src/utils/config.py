@@ -343,6 +343,38 @@ class FeatureImportanceConfig(BaseModel):
     )
 
 
+class TuningConfig(BaseModel):
+    """Randomised hyperparameter search settings for the training stage.
+
+    Disabled by default, so pipelines that don't opt in train on the fixed
+    `hyperparameters` block exactly as before.
+
+    The search is scored by cross-validation on the training set only — the
+    hold-out test set is never seen during tuning. When `cross_validation` has a
+    `group_column`, the search reuses the same grouping, so a tuned model cannot
+    be selected on the strength of leakage the CV strategy was chosen to prevent.
+
+    Search spaces live per model type in `param_distributions`, keyed by the
+    registry `type` string, so a pipeline can tune some models and leave others
+    at their configured defaults.
+    """
+
+    enabled: bool = Field(default=False, description="Run a hyperparameter search before final fit")
+    n_iter: int = Field(
+        default=25, ge=1,
+        description="Candidate settings sampled per model. Higher is a better search, linearly slower.",
+    )
+    folds: int = Field(default=5, ge=2, description="Folds used to score each candidate")
+    scoring: str = Field(
+        default="r2",
+        description="sklearn scoring name used to rank candidates (e.g. 'r2', 'neg_root_mean_squared_error')",
+    )
+    param_distributions: dict[str, dict[str, list[Any]]] = Field(
+        default_factory=dict,
+        description="Per-model-type search space: {model_type: {param: [values]}}",
+    )
+
+
 class ModelsConfig(BaseModel):
     """Models configuration."""
 
@@ -355,6 +387,7 @@ class ModelsConfig(BaseModel):
     feature_importance: FeatureImportanceConfig = Field(
         default_factory=FeatureImportanceConfig
     )
+    tuning: TuningConfig = Field(default_factory=TuningConfig)
 
 
 class OrchestrationDAGConfig(BaseModel):

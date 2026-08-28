@@ -22,7 +22,12 @@ from typing import Any
 import numpy as np
 import pandas as pd
 from sklearn.base import clone
-from sklearn.model_selection import GroupKFold, KFold, cross_val_score
+from sklearn.model_selection import (
+    GroupKFold,
+    KFold,
+    RandomizedSearchCV,
+    cross_val_score,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +35,169 @@ logger = logging.getLogger(__name__)
 # negated score by sklearn convention; we flip the sign back when reporting.
 _R2 = "r2"
 _NEG_RMSE = "neg_root_mean_squared_error"
+
+
+def _build_cv(
+    X: pd.DataFrame,
+    y: pd.Series,
+    folds: int,
+    group_column: str | None,
+    random_state: int,
+) -> tuple[Any, str, int]:
+    """Construct the fold partition shared by cross-validation and tuning.
+
+    Kept as one function so a hyperparameter search cannot accidentally be
+    scored on a different splitting strategy than the one used to compare the
+    resulting models. If grouping matters enough to use for evaluation, it
+    matters for selection too.
+
+    Args:
+        X: Feature matrix.
+        y: Target vector.
+        folds: Requested fold count, reduced if there are fewer groups.
+        group_column: Optional column in X whose values define groups.
+        random_state: Seed for the shuffled KFold (unused by GroupKFold).
+
+    Returns:
+        Tuple of (cv, strategy label, effective fold count).
+
+    Raises:
+        ValueError: If folds < 2, or if group_column is not a column of X.
+    """
+    if folds < 2:
+        raise ValueError(f"folds must be >= 2, got {folds}")
+
+    if group_column is None:
+        return KFold(n_splits=folds, shuffle=True, random_state=random_state), "kfold_shuffled", folds
+
+    if group_column not in X.columns:
+        raise ValueError(
+            f"group_column '{group_column}' not found in feature matrix. "
+            f"Set cross_validation.group_column to null, or to one of the "
+            f"engineered feature columns."
+        )
+    groups = X[group_column].to_numpy()
+    n_groups = len(np.unique(groups))
+    if n_groups < folds:
+        logger.warning(
+            "group_column '%s' has only %d distinct values but %d folds were "
+            "requested; reducing folds to %d",
+            group_column, n_groups, folds, n_groups,
+        )
+        folds = n_groups
+    # GroupKFold.split() returns a generator, which cross_val_score would
+    # exhaust on the first metric. Materializing it means R² and RMSE are
+    # scored on exactly the same partition.
+    cv = list(GroupKFold(n_splits=folds).split(X, y, groups))
+    return cv, f"grouped_kfold[{group_column}]", folds
+
+
+def tune_model(
+    model: Any,
+    X: pd.DataFrame,
+    y: pd.Series,
+    param_distributions: dict[str, list[Any]],
+    n_iter: int = 25,
+    folds: int = 5,
+    group_column: str | None = None,
+    scoring: str = _R2,
+    random_state: int = 42,
+) -> tuple[Any, dict[str, Any]]:
+    """Search hyperparameters by cross-validated randomized search.
+
+    Randomized rather than exhaustive search: with a weak signal, a fine grid
+    spends most of its budget distinguishing candidates whose scores differ by
+    less than fold-to-fold noise. Sampling covers more of the space for the same
+    number of fits.
+
+    The search sees only the data passed in — callers must pass the training
+    split, never the hold-out set. When `group_column` is given, candidates are
+    scored on the same grouped partition used for model comparison, so a
+    hyperparameter cannot be selected because it exploits within-group
+    similarity.
+
+    Args:
+        model: Unfitted estimator. Cloned, so the caller's instance is untouched.
+        X: Training features.
+        y: Training target.
+        param_distributions: Search space as {param_name: [candidate values]}.
+        n_iter: Number of candidate settings sampled.
+        folds: Folds used to score each candidate.
+        group_column: Optional column in X whose values define groups.
+        scoring: sklearn scoring name used to rank candidates.
+        random_state: Seed for candidate sampling, making the search repeatable.
+
+    Returns:
+        Tuple of (unfitted estimator carrying the best params, search summary).
+        The estimator is returned unfitted so the caller controls the final fit
+        and any downstream logging.
+
+    Raises:
+        ValueError: If param_distributions is empty, or folds/group_column are invalid.
+    """
+    if not param_distributions:
+        raise ValueError("param_distributions is empty; nothing to search")
+
+    cv, strategy, folds = _build_cv(X, y, folds, group_column, random_state)
+
+    # Cap n_iter at the size of a fully enumerable space, so a small grid is
+    # searched exhaustively rather than resampling the same points.
+    space_size = 1
+    for values in param_distributions.values():
+        space_size *= max(len(values), 1)
+    effective_n_iter = min(n_iter, space_size)
+
+    search = RandomizedSearchCV(
+        estimator=clone(model),
+        param_distributions=param_distributions,
+        n_iter=effective_n_iter,
+        cv=cv,
+        scoring=scoring,
+        random_state=random_state,
+        n_jobs=-1,
+        refit=False,
+    )
+    search.fit(X, y)
+
+    results = search.cv_results_
+    order = np.argsort(results["rank_test_score"])
+    top = [
+        {
+            "params": {k: _jsonable(v) for k, v in results["params"][i].items()},
+            "mean_score": float(results["mean_test_score"][i]),
+            "std_score": float(results["std_test_score"][i]),
+        }
+        for i in order[:5]
+    ]
+
+    summary = {
+        "strategy": strategy,
+        "folds": int(folds),
+        "scoring": scoring,
+        "n_candidates": int(effective_n_iter),
+        "space_size": int(space_size),
+        "best_params": {k: _jsonable(v) for k, v in search.best_params_.items()},
+        "best_score": float(search.best_score_),
+        "top_candidates": top,
+    }
+
+    tuned = clone(model).set_params(**search.best_params_)
+    logger.info(
+        "Tuning (%s, %d candidates) best %s=%.4f with %s",
+        strategy, effective_n_iter, scoring, search.best_score_, summary["best_params"],
+    )
+    return tuned, summary
+
+
+def _jsonable(value: Any) -> Any:
+    """Coerce numpy scalars to built-ins so the summary serializes to YAML/JSON."""
+    if isinstance(value, (np.integer,)):
+        return int(value)
+    if isinstance(value, (np.floating,)):
+        return float(value)
+    if isinstance(value, (np.bool_,)):
+        return bool(value)
+    return value
 
 
 def cross_validate_model(
@@ -65,34 +233,7 @@ def cross_validate_model(
     Raises:
         ValueError: If folds < 2, or if group_column is not a column of X.
     """
-    if folds < 2:
-        raise ValueError(f"folds must be >= 2, got {folds}")
-
-    groups = None
-    if group_column is not None:
-        if group_column not in X.columns:
-            raise ValueError(
-                f"group_column '{group_column}' not found in feature matrix. "
-                f"Set cross_validation.group_column to null, or to one of the "
-                f"engineered feature columns."
-            )
-        groups = X[group_column].to_numpy()
-        n_groups = len(np.unique(groups))
-        if n_groups < folds:
-            logger.warning(
-                "group_column '%s' has only %d distinct values but %d folds were "
-                "requested; reducing folds to %d",
-                group_column, n_groups, folds, n_groups,
-            )
-            folds = n_groups
-        # GroupKFold.split() returns a generator, which cross_val_score would
-        # exhaust on the first metric. Materializing it means R² and RMSE are
-        # scored on exactly the same partition.
-        cv: Any = list(GroupKFold(n_splits=folds).split(X, y, groups))
-        strategy = f"grouped_kfold[{group_column}]"
-    else:
-        cv = KFold(n_splits=folds, shuffle=True, random_state=random_state)
-        strategy = "kfold_shuffled"
+    cv, strategy, folds = _build_cv(X, y, folds, group_column, random_state)
 
     r2 = cross_val_score(clone(model), X, y, cv=cv, scoring=_R2)
     rmse = -cross_val_score(clone(model), X, y, cv=cv, scoring=_NEG_RMSE)

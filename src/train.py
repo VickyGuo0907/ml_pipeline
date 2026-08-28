@@ -16,6 +16,7 @@ from src.utils.diagnostics import (
     cross_validate_model,
     feature_importance,
     residual_diagnostics,
+    tune_model,
 )
 from src.utils.io import resolve_run_path
 from src.utils.model_registry import get_model
@@ -181,6 +182,40 @@ def train_models(
                 mlflow.log_param("boxcox_lambda", boxcox_lambda)
                 if boxcox_offset is not None:
                     mlflow.log_param("boxcox_offset", boxcox_offset)
+            # Hyperparameter search runs first, on the training set only, and
+            # reuses the CV grouping so a setting cannot be selected because it
+            # exploits within-group similarity. The returned estimator carries
+            # the winning parameters but is still unfitted, so cross-validation
+            # below scores the tuned configuration rather than the default one.
+            tuning_summary: dict[str, Any] | None = None
+            tune_cfg = models_config.tuning
+            search_space = tune_cfg.param_distributions.get(model_cfg.type, {})
+            if tune_cfg.enabled and search_space:
+                try:
+                    model, tuning_summary = tune_model(
+                        model,
+                        X_train,
+                        y_train,
+                        param_distributions=search_space,
+                        n_iter=tune_cfg.n_iter,
+                        folds=tune_cfg.folds,
+                        group_column=models_config.cross_validation.group_column,
+                        scoring=tune_cfg.scoring,
+                        random_state=models_config.random_state,
+                    )
+                    mlflow.log_dict(tuning_summary, "tuning_search.json")
+                    mlflow.log_param("tuned", True)
+                    mlflow.log_metric("tuning_best_cv_score", tuning_summary["best_score"])
+                    for key, value in tuning_summary["best_params"].items():
+                        mlflow.log_param(f"best_{key}", value)
+                except Exception as e:
+                    logger.warning("Tuning skipped for %s: %s", model_cfg.name, e)
+            elif tune_cfg.enabled:
+                logger.info(
+                    "Tuning enabled but no search space defined for type '%s'; "
+                    "using configured hyperparameters.", model_cfg.type,
+                )
+
             # Cross-validation runs on the training set only, before the final fit,
             # so the held-out test set is never touched during model comparison.
             cv_summary: dict[str, Any] | None = None
@@ -291,6 +326,14 @@ def train_models(
             "test_r2": metrics["test_r2"],
             "feature_count": X_train.shape[1],
         }
+        if tuning_summary is not None:
+            training_results["models"][model_cfg.name]["tuning"] = {
+                "strategy": tuning_summary["strategy"],
+                "n_candidates": tuning_summary["n_candidates"],
+                "scoring": tuning_summary["scoring"],
+                "best_params": tuning_summary["best_params"],
+                "best_score": tuning_summary["best_score"],
+            }
         if cv_summary is not None:
             training_results["models"][model_cfg.name]["cross_validation"] = cv_summary
         if diag:
