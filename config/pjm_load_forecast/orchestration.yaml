@@ -16,7 +16,7 @@ tasks:
   enabled:
     profile: true
     unsupervised_explore: false   # not applicable to a single univariate series
-    drift_report: true
+    drift_report: false            # forecasting drift comparison not yet implemented - see Plan 2+
 
 directories:
   landing: data/pjm_load_forecast/landing

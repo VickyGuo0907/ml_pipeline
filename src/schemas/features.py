@@ -23,9 +23,12 @@ def build_features_schema(target_col: str) -> DataFrameSchema:
 def build_forecast_features_schema(target_col: str) -> DataFrameSchema:
     """Build a feature validation schema for a forecasting pipeline's feature matrix.
 
-    Differs from build_features_schema only in the index: a forecasting
-    matrix is indexed by a DatetimeIndex (the observation timestamp), not
-    a plain integer row index, since row order and spacing are meaningful.
+    Differs from build_features_schema in two ways: (1) the index must be a
+    DatetimeIndex (observation timestamp), not a plain integer row index, since
+    row order and spacing are meaningful; (2) coerce=False for strict column-type
+    validation, vs coerce=True in the tabular schema. This stricter validation
+    prevents a plain integer target column from silently coercing to float and
+    masking type mismatches.
 
     Args:
         target_col: Target column name from pipeline.yaml (e.g. 'PJME_MW').
