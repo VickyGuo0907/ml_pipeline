@@ -376,6 +376,94 @@ class TuningConfig(BaseModel):
     )
 
 
+class ForecastCleaningConfig(BaseModel):
+    """Gap-handling rules for the forecasting clean stage.
+
+    A continuous hourly series can have missing hours (sensor outage, DST,
+    upstream gaps). Short gaps are filled; gaps longer than max_gap_hours
+    fail loud rather than being silently interpolated over, since a
+    multi-day outage papered over with interpolation would corrupt lag
+    features for weeks afterward.
+    """
+
+    max_gap_hours: int = Field(
+        default=6, ge=1,
+        description="Gaps longer than this many hours fail the clean stage instead of being filled",
+    )
+    fill_strategy: Literal["interpolate", "ffill"] = Field(
+        default="interpolate",
+        description="How gaps at or under max_gap_hours are filled",
+    )
+
+
+class ForecastFeaturesConfig(BaseModel):
+    """Feature engineering settings for the forecasting feature stage.
+
+    Lags and rolling windows are in hours, matching the PJM series'
+    hourly granularity. calendar_features/holiday_features are booleans
+    (not sub-configs) because there is nothing to tune about them beyond
+    on/off - the feature set they produce is fixed.
+    """
+
+    lags: list[int] = Field(
+        default_factory=lambda: [1, 24, 168],
+        description="Lag hours to compute as features, e.g. [1, 24, 168] for t-1h/t-24h/t-168h",
+    )
+    rolling_windows: list[int] = Field(
+        default_factory=lambda: [24, 168],
+        description="Rolling mean/std window sizes in hours",
+    )
+    calendar_features: bool = Field(
+        default=True, description="Add hour/day_of_week/month/is_weekend columns",
+    )
+    holiday_features: bool = Field(
+        default=True, description="Add is_holiday/days_to_nearest_holiday columns (US federal holidays)",
+    )
+    snapshot_hours: int = Field(
+        default=168, ge=1,
+        description="How many trailing hours of the series to snapshot per run for serving-time lag seeding",
+    )
+
+
+class ForecastEvaluationConfig(BaseModel):
+    """Rolling-origin evaluation settings for the forecasting train/evaluate stages.
+
+    A single train/test split boundary isn't enough to score a forecaster -
+    forecasts are only meaningful over a bounded horizon, so evaluation
+    samples n_windows origins across the test period and scores a
+    horizon_hours-ahead forecast from each, averaging the result.
+    """
+
+    horizon_hours: int = Field(
+        default=24, ge=1, description="How many hours ahead each rolling-origin forecast covers",
+    )
+    n_windows: int = Field(
+        default=5, ge=1, description="Number of rolling-origin windows sampled across the test period",
+    )
+    champion_metric: Literal["cv_mape"] = Field(
+        default="cv_mape",
+        description="How the run champion is chosen - average MAPE across rolling-origin windows",
+    )
+
+
+class ForecastModelsConfig(BaseModel):
+    """Models configuration for a forecasting pipeline.
+
+    Mirrors the shape of the tabular ModelsConfig (models/random_state/
+    train_test_split) but swaps the tabular evaluation/cross_validation/
+    diagnostics/tuning blocks for the single ForecastEvaluationConfig block
+    that governs rolling-origin scoring instead.
+    """
+
+    models: list[ModelConfig] = Field(..., description="Model definitions (types: ets, sarimax, gbm)")
+    random_state: int = Field(default=42)
+    train_test_split: float = Field(
+        default=0.8, ge=0.0, le=1.0,
+        description="Fraction of the chronological timeline kept as train; the rest (most recent) is test",
+    )
+    evaluation: ForecastEvaluationConfig = Field(default_factory=ForecastEvaluationConfig)
+
+
 class ModelsConfig(BaseModel):
     """Models configuration."""
 
@@ -547,6 +635,42 @@ def load_models_config(config_dir: str | Path = "config") -> ModelsConfig:
         Validated ModelsConfig
     """
     return _load_typed_config(config_dir, "models.yaml", ModelsConfig)
+
+
+def load_forecast_cleaning_config(config_dir: str | Path = "config") -> ForecastCleaningConfig:
+    """Load and validate forecasting cleaning configuration.
+
+    Args:
+        config_dir: Directory containing config files
+
+    Returns:
+        Validated ForecastCleaningConfig
+    """
+    return _load_typed_config(config_dir, "cleaning.yaml", ForecastCleaningConfig)
+
+
+def load_forecast_features_config(config_dir: str | Path = "config") -> ForecastFeaturesConfig:
+    """Load and validate forecasting feature engineering configuration.
+
+    Args:
+        config_dir: Directory containing config files
+
+    Returns:
+        Validated ForecastFeaturesConfig
+    """
+    return _load_typed_config(config_dir, "features.yaml", ForecastFeaturesConfig)
+
+
+def load_forecast_models_config(config_dir: str | Path = "config") -> ForecastModelsConfig:
+    """Load and validate forecasting models configuration.
+
+    Args:
+        config_dir: Directory containing config files
+
+    Returns:
+        Validated ForecastModelsConfig
+    """
+    return _load_typed_config(config_dir, "models.yaml", ForecastModelsConfig)
 
 
 def load_orchestration_config(config_dir: str | Path = "config") -> OrchestrationConfig:

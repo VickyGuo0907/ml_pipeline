@@ -5,6 +5,10 @@ from src.utils.config import (
     BenchmarkConfig,
     CleaningConfig,
     FeaturesConfig,
+    ForecastCleaningConfig,
+    ForecastEvaluationConfig,
+    ForecastFeaturesConfig,
+    ForecastModelsConfig,
     JoinDirectConfig,
     JoinStrategyConfig,
     ModelsConfig,
@@ -15,6 +19,9 @@ from src.utils.config import (
     discover_pipelines,
     load_cleaning_config,
     load_features_config,
+    load_forecast_cleaning_config,
+    load_forecast_features_config,
+    load_forecast_models_config,
     load_models_config,
     load_pipeline_config,
     load_pipeline_orchestration_config,
@@ -333,3 +340,57 @@ def test_discover_pipelines_includes_hospital_readmission_lagged():
     assert "hospital_readmission_lagged" in names
     assert "biomedical_clinical" in names
     assert "bioinfo_gene" in names
+
+
+def test_forecast_cleaning_config_defaults():
+    """ForecastCleaningConfig has sane defaults so an empty cleaning.yaml still validates."""
+    config = ForecastCleaningConfig()
+    assert config.max_gap_hours == 6
+    assert config.fill_strategy == "interpolate"
+
+
+def test_forecast_features_config_defaults():
+    """ForecastFeaturesConfig has sane defaults so an empty features.yaml still validates."""
+    config = ForecastFeaturesConfig()
+    assert config.lags == [1, 24, 168]
+    assert config.rolling_windows == [24, 168]
+    assert config.calendar_features is True
+    assert config.holiday_features is True
+    assert config.snapshot_hours == 168
+
+
+def test_forecast_models_config_requires_models():
+    """ForecastModelsConfig requires at least the models list to be supplied."""
+    config = ForecastModelsConfig(
+        models=[{"name": "ets_model", "type": "ets", "hyperparameters": {}}],
+    )
+    assert config.models[0].type == "ets"
+    assert config.evaluation.champion_metric == "cv_mape"
+    assert config.evaluation.horizon_hours == 24
+    assert config.evaluation.n_windows == 5
+
+
+def test_load_forecast_configs_from_yaml(tmp_path):
+    """The three forecast config loaders read and validate YAML files, matching the existing load_*_config pattern."""
+    (tmp_path / "cleaning.yaml").write_text("max_gap_hours: 12\nfill_strategy: ffill\n")
+    (tmp_path / "features.yaml").write_text("lags: [1, 24]\nrolling_windows: [24]\n")
+    (tmp_path / "models.yaml").write_text(
+        "models:\n"
+        "  - name: sarimax_model\n"
+        "    type: sarimax\n"
+        "    hyperparameters: {order: [2, 1, 2]}\n"
+        "evaluation:\n"
+        "  horizon_hours: 48\n"
+    )
+
+    cleaning = load_forecast_cleaning_config(tmp_path)
+    features = load_forecast_features_config(tmp_path)
+    models = load_forecast_models_config(tmp_path)
+
+    assert isinstance(cleaning, ForecastCleaningConfig)
+    assert cleaning.max_gap_hours == 12
+    assert isinstance(features, ForecastFeaturesConfig)
+    assert features.lags == [1, 24]
+    assert isinstance(models, ForecastModelsConfig)
+    assert models.evaluation.horizon_hours == 48
+    assert models.models[0].name == "sarimax_model"
