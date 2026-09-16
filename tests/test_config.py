@@ -10,6 +10,7 @@ from src.utils.config import (
     ModelsConfig,
     OrchestrationConfig,
     PipelineConfig,
+    ProblemType,
     UnsupervisedConfig,
     discover_pipelines,
     load_cleaning_config,
@@ -20,6 +21,11 @@ from src.utils.config import (
 )
 
 BIOMEDICAL_CONFIG = "config/biomedical_clinical"
+
+
+def test_problem_type_has_forecasting_value():
+    """ProblemType gains a FORECASTING member for the new pjm_load_forecast pipeline."""
+    assert ProblemType.FORECASTING.value == "forecasting"
 
 
 def test_load_pipeline_config():
