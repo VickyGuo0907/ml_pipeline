@@ -4,7 +4,7 @@ import pandas as pd
 import pytest
 from pandera.errors import SchemaError
 
-from src.schemas.features import build_features_schema
+from src.schemas.features import build_features_schema, build_forecast_features_schema
 
 # Use the same target column as pipeline.yaml for schema tests
 features_schema = build_features_schema("Excess Readmission Ratio")
@@ -54,3 +54,30 @@ class TestFeaturesSchema:
         })
         validated = features_schema.validate(df)
         assert len(validated) == 2
+
+
+class TestForecastFeaturesSchema:
+    """Tests for the forecasting feature matrix schema (DatetimeIndex, not int index)."""
+
+    def test_valid_forecast_feature_matrix(self):
+        """A DatetimeIndex-indexed matrix with a numeric target passes validation."""
+        schema = build_forecast_features_schema("PJME_MW")
+        df = pd.DataFrame(
+            {
+                "PJME_MW": [30000.0, 31000.0, 29500.0],
+                "lag_1h": [29800.0, 30000.0, 31000.0],
+                "hour": [0, 1, 2],
+            },
+            index=pd.DatetimeIndex(
+                ["2026-01-01 00:00", "2026-01-01 01:00", "2026-01-01 02:00"], name="Datetime",
+            ),
+        )
+        validated = schema.validate(df)
+        assert len(validated) == 3
+
+    def test_int_indexed_matrix_fails_forecast_schema(self):
+        """A plain integer index is rejected - forecasting matrices must carry a DatetimeIndex."""
+        schema = build_forecast_features_schema("PJME_MW")
+        df = pd.DataFrame({"PJME_MW": [30000.0, 31000.0]})
+        with pytest.raises(SchemaError):
+            schema.validate(df)
