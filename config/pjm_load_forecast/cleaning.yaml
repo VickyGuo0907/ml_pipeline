@@ -1,0 +1,5 @@
+# Gap-handling for the hourly series. Short gaps (sensor blips, DST) are
+# filled; longer ones fail loud rather than being silently papered over,
+# since a multi-day outage smoothed away would corrupt weeks of lag features.
+max_gap_hours: 6
+fill_strategy: "interpolate"

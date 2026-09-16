@@ -1,0 +1,29 @@
+dag:
+  dag_id: pjm_load_forecast_pipeline
+  owner: data-eng
+  description: PJM hourly load forecasting - ETS/SARIMAX/GBM comparison on PJME_MW
+  schedule: "@weekly"
+  catchup: false
+  tags:
+    - ml
+    - forecasting
+    - energy
+
+tasks:
+  retries: 1
+  retry_delay_minutes: 5
+  train_models_retries: 0
+  enabled:
+    profile: true
+    unsupervised_explore: false   # not applicable to a single univariate series
+    drift_report: true
+
+directories:
+  landing: data/pjm_load_forecast/landing
+  raw: data/pjm_load_forecast/raw
+  interim: data/pjm_load_forecast/interim
+  features: data/pjm_load_forecast/features
+  benchmark: data/pjm_load_forecast/benchmark
+  reports: reports/pjm_load_forecast
+  config: config/pjm_load_forecast
+  reports_base_url: "http://localhost:8888/pjm_load_forecast"

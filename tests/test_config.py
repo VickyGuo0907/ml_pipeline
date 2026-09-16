@@ -394,3 +394,35 @@ def test_load_forecast_configs_from_yaml(tmp_path):
     assert isinstance(models, ForecastModelsConfig)
     assert models.evaluation.horizon_hours == 48
     assert models.models[0].name == "sarimax_model"
+
+
+PJM_FORECAST_CONFIG = "config/pjm_load_forecast"
+
+
+def test_load_pjm_forecast_pipeline_config():
+    """The pjm_load_forecast pipeline.yaml loads with problem_type=forecasting."""
+    config = load_pipeline_config(PJM_FORECAST_CONFIG)
+    assert config.problem_type == ProblemType.FORECASTING
+    assert config.target.name == "PJME_MW"
+    assert config.pipeline_type == "pjm_load_forecast"
+    assert len(config.sources) == 1
+
+
+def test_load_pjm_forecast_recipe_configs():
+    """The pjm_load_forecast cleaning/features/models YAMLs load against the forecast config classes."""
+    cleaning = load_forecast_cleaning_config(PJM_FORECAST_CONFIG)
+    features = load_forecast_features_config(PJM_FORECAST_CONFIG)
+    models = load_forecast_models_config(PJM_FORECAST_CONFIG)
+
+    assert cleaning.max_gap_hours >= 1
+    assert features.lags
+    model_types = {m.type for m in models.models}
+    assert model_types == {"ets", "sarimax", "gbm"}
+
+
+def test_load_pjm_forecast_orchestration_config():
+    """The pjm_load_forecast orchestration.yaml merges with base defaults like the other pipelines."""
+    config = load_pipeline_orchestration_config(PJM_FORECAST_CONFIG, base_dir="config/base")
+    assert config.dag.dag_id == "pjm_load_forecast_pipeline"
+    assert config.directories.landing == "data/pjm_load_forecast/landing"
+    assert config.directories.config == "config/pjm_load_forecast"

@@ -1,0 +1,35 @@
+# Three models trained and compared per run: two classical univariate
+# forecasters (ETS, SARIMAX) and one ML model with engineered lag/rolling/
+# calendar features (GBM). ETS/SARIMAX orders are fixed here, not searched -
+# consistent with the project's existing ban on automated hyperparameter
+# search (Optuna/Ray Tune are out of scope).
+
+models:
+  - name: "pjm_load_forecast_ets"
+    type: "ets"
+    hyperparameters:
+      seasonal_periods: 24
+      trend: "add"
+      seasonal: "add"
+
+  - name: "pjm_load_forecast_sarimax"
+    type: "sarimax"
+    hyperparameters:
+      order: [2, 1, 2]
+      seasonal_order: [1, 1, 1, 24]
+      use_holiday_exog: true
+
+  - name: "pjm_load_forecast_gbm"
+    type: "gbm"
+    hyperparameters:
+      n_estimators: 200
+      learning_rate: 0.05
+      max_depth: 7
+      num_leaves: 31
+      random_state: 42
+      n_jobs: -1
+
+evaluation:
+  horizon_hours: 24
+  n_windows: 5
+  champion_metric: "cv_mape"

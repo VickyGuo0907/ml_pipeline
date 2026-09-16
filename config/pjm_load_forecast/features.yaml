@@ -1,0 +1,9 @@
+# Lag/rolling windows in hours, matching the series' hourly granularity.
+# 1h = last known load, 24h = same hour yesterday, 168h = same hour last week.
+lags: [1, 24, 168]
+rolling_windows: [24, 168]
+calendar_features: true
+holiday_features: true
+
+# Trailing hours snapshotted per run for serving-time lag seeding (Plan 5).
+snapshot_hours: 168

@@ -1,0 +1,54 @@
+# PJM Load Forecasting Pipeline
+# Hourly electricity load (PJM Interconnection, PJME zone) - forecast PJME_MW
+# from its own lag/rolling/calendar history. Source CSV (PJME_hourly.csv) is
+# downloaded from Kaggle by the user and staged into
+# data/pjm_load_forecast/landing/ - not committed to the repo.
+# https://www.kaggle.com/datasets/robikscube/hourly-energy-consumption
+
+pipeline_type: pjm_load_forecast
+
+sources:
+  - name: "pjm_load_forecast"
+    path: "data/pjm_load_forecast/landing"
+    format: "csv"
+
+target:
+  name: "PJME_MW"
+  type: "continuous"
+
+problem_type: "forecasting"
+
+# Fraction of the chronological timeline kept as train; the most recent
+# 20% is held out as test. NOT a random split - forecasting splits must
+# preserve time order.
+train_test_split: 0.80
+
+random_state: 42
+
+validation:
+  # PJME_hourly.csv ships clean (no sentinel strings), but the bound check
+  # below still catches obviously corrupt rows.
+  required_columns:
+    - "Datetime"
+    - "PJME_MW"
+  min_rows: 1000
+
+  per_file_schemas:
+    - file_pattern: "PJME_hourly"
+      required_columns:
+        - "Datetime"
+        - "PJME_MW"
+      numeric_bounds:
+        "PJME_MW":
+          min: 0.0
+          max: 120000.0   # PJM's historical hourly peak is well under 120,000 MW
+      min_rows: 1000
+
+profiling:
+  minimal: false
+
+unsupervised:
+  enabled: false   # PCA/k-means don't apply to a single univariate series
+
+benchmark:
+  enabled: false   # Plan 4 revisits this once champion/challenger for forecasting is designed
