@@ -18,21 +18,27 @@ from airflow import DAG  # noqa: E402
 from airflow.models import TaskInstance  # noqa: E402
 from airflow.operators.python import PythonOperator  # noqa: E402
 
+from typing import Any, Callable  # noqa: E402
+
 from src.benchmark import create_benchmark_snapshot  # noqa: E402
 from src.clean import clean_raw_data  # noqa: E402
 from src.evaluate import register_models_to_mlflow  # noqa: E402
 from src.explore import run_unsupervised_analysis  # noqa: E402
 from src.features import engineer_features  # noqa: E402
+from src.forecasting.clean_forecast import clean_forecast_data  # noqa: E402
+from src.forecasting.evaluate_forecast import register_forecast_models_to_mlflow  # noqa: E402
+from src.forecasting.features_forecast import engineer_forecast_features  # noqa: E402
+from src.forecasting.train_forecast import train_forecast_models  # noqa: E402
 from src.ingest import ingest_files  # noqa: E402
 from src.monitoring import generate_drift_report  # noqa: E402
 from src.profile import profile_raw_files  # noqa: E402
 from src.train import train_models  # noqa: E402
-from src.utils.config import OrchestrationConfig, discover_pipelines, load_pipeline_config, load_pipeline_orchestration_config  # noqa: E402
+from src.utils.config import OrchestrationConfig, ProblemType, discover_pipelines, load_pipeline_config, load_pipeline_orchestration_config  # noqa: E402
 from src.utils.io import find_previous_run_id, resolve_run_path  # noqa: E402
 from src.validate import validate_raw_files  # noqa: E402
 
 import pandas as pd  # noqa: E402
-from src.schemas.features import build_features_schema  # noqa: E402
+from src.schemas.features import build_features_schema, build_forecast_features_schema  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +57,49 @@ _TASK_REGISTER = "08_register_to_mlflow"
 _TASK_DRIFT = "09_drift_report"
 
 
+def _select_forecasting_stage_functions(problem_type: ProblemType) -> dict[str, Callable] | None:
+    """Return forecasting stage functions for a forecasting pipeline, else None.
+
+    None signals "use the default tabular functions" - build_dag() falls
+    back to clean_raw_data/engineer_features/train_models/register_models_to_mlflow
+    unchanged for every problem_type except forecasting, so the three
+    existing pipelines are unaffected by this dispatch.
+
+    Args:
+        problem_type: The pipeline's problem_type from pipeline.yaml.
+
+    Returns:
+        Dict of the four forecasting stage functions, or None.
+    """
+    if problem_type != ProblemType.FORECASTING:
+        return None
+    return {
+        "clean": clean_forecast_data,
+        "features": engineer_forecast_features,
+        "train": train_forecast_models,
+        "register": register_forecast_models_to_mlflow,
+    }
+
+
+def _select_features_schema_builder(problem_type: ProblemType) -> Callable[[str], Any]:
+    """Return the feature-matrix schema builder appropriate for this problem_type.
+
+    Forecasting feature matrices carry a DatetimeIndex (row order/spacing is
+    meaningful); tabular feature matrices carry a plain integer index. The
+    two schemas differ only in that index type.
+
+    Args:
+        problem_type: The pipeline's problem_type from pipeline.yaml.
+
+    Returns:
+        build_forecast_features_schema for forecasting pipelines,
+        build_features_schema for every other problem_type.
+    """
+    if problem_type == ProblemType.FORECASTING:
+        return build_forecast_features_schema
+    return build_features_schema
+
+
 def build_dag(config: OrchestrationConfig) -> DAG:
     """Build a complete pipeline DAG from an orchestration config.
 
@@ -60,6 +109,14 @@ def build_dag(config: OrchestrationConfig) -> DAG:
     Returns:
         Configured Airflow DAG with all pipeline tasks wired
     """
+    pipeline_cfg = load_pipeline_config(config.directories.config)
+    _forecast_fns = _select_forecasting_stage_functions(pipeline_cfg.problem_type)
+    _clean_fn = _forecast_fns["clean"] if _forecast_fns else clean_raw_data
+    _features_fn = _forecast_fns["features"] if _forecast_fns else engineer_features
+    _train_fn = _forecast_fns["train"] if _forecast_fns else train_models
+    _register_fn = _forecast_fns["register"] if _forecast_fns else register_models_to_mlflow
+    _features_schema_builder = _select_features_schema_builder(pipeline_cfg.problem_type)
+
     default_args = {
         "owner": config.dag.owner,
         "start_date": datetime.strptime(config.dag.start_date, "%Y-%m-%d"),
@@ -113,7 +170,7 @@ def build_dag(config: OrchestrationConfig) -> DAG:
 
     def clean_wrapper(**context) -> dict:
         """Clean raw data: impute, drop bad cols, dedup."""
-        return clean_raw_data(
+        return _clean_fn(
             raw_dir=config.directories.raw,
             interim_dir=config.directories.interim,
             run_id=_pull_run_id(context),
@@ -122,7 +179,7 @@ def build_dag(config: OrchestrationConfig) -> DAG:
 
     def features_wrapper(**context) -> dict:
         """Engineer features: encode, Box-Cox, VIF, scale, split."""
-        return engineer_features(
+        return _features_fn(
             interim_dir=config.directories.interim,
             features_dir=config.directories.features,
             run_id=_pull_run_id(context),
@@ -134,7 +191,6 @@ def build_dag(config: OrchestrationConfig) -> DAG:
         run_id = _pull_run_id(context)
         train_df = pd.read_parquet(resolve_run_path(config.directories.features, run_id) / "train.parquet")
 
-        pipeline_cfg = load_pipeline_config(config.directories.config)
         target_col = pipeline_cfg.target.name
 
         if len(train_df) < 100:
@@ -144,7 +200,7 @@ def build_dag(config: OrchestrationConfig) -> DAG:
         if non_numeric:
             raise ValueError(f"Non-numeric columns in feature matrix: {non_numeric}")
 
-        build_features_schema(target_col).validate(train_df)
+        _features_schema_builder(target_col).validate(train_df)
         return {"validated_rows": len(train_df), "target_col": target_col}
 
     def explore_wrapper(**context) -> dict:
@@ -172,7 +228,7 @@ def build_dag(config: OrchestrationConfig) -> DAG:
 
     def train_wrapper(**context) -> dict:
         """Train all models and log R² + RMSE to MLflow."""
-        result = train_models(
+        result = _train_fn(
             features_dir=config.directories.features,
             run_id=_pull_run_id(context),
             config_dir=config.directories.config,
@@ -187,7 +243,7 @@ def build_dag(config: OrchestrationConfig) -> DAG:
         """Evaluate models against thresholds and register passing ones to MLflow Staging."""
         ti: TaskInstance = context["task_instance"]
         mlflow_run_ids = ti.xcom_pull(task_ids=_TASK_TRAIN, key="mlflow_run_ids")
-        return register_models_to_mlflow(
+        return _register_fn(
             mlflow_tracking_uri=config.mlflow.tracking_uri,
             mlflow_run_ids=mlflow_run_ids,
             config_dir=config.directories.config,
