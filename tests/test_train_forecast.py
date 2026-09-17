@@ -7,14 +7,7 @@ import pandas as pd
 import pytest
 import mlflow
 
-from src.forecasting.train_forecast import (
-    _mape,
-    _score_gbm_origins,
-    _score_statsmodels_origins,
-    _select_cv_origins,
-    train_forecast_models,
-)
-from src.forecasting.model_registry import fit_ets
+from src.forecasting.train_forecast import train_forecast_models
 
 
 def _synthetic_train_df(n_hours: int = 200, seasonal_period: int = 24) -> pd.DataFrame:
@@ -69,72 +62,6 @@ def _write_forecast_config(
         models_yaml += f"  - name: {m['name']}\n    type: {m['type']}\n    hyperparameters: {m['hyperparameters']}\n"
     models_yaml += f"evaluation:\n  horizon_hours: {horizon_hours}\n  n_windows: {n_windows}\n"
     (config_dir / "models.yaml").write_text(models_yaml)
-
-
-class TestMape:
-    def test_zero_error_is_zero_percent(self):
-        actual = pd.Series([10.0, 20.0, 30.0])
-        assert _mape(actual, actual) == pytest.approx(0.0)
-
-    def test_known_percentage_error(self):
-        actual = pd.Series([100.0, 200.0])
-        predicted = pd.Series([110.0, 180.0])  # +10%, -10%
-        assert _mape(actual, predicted) == pytest.approx(10.0)
-
-
-class TestSelectCvOrigins:
-    def test_origins_leave_room_for_full_horizon(self):
-        idx = pd.date_range("2020-01-01", periods=100, freq="h")
-        origins = _select_cv_origins(idx, n_windows=3, horizon_hours=10)
-        for origin in origins:
-            end = origin + pd.Timedelta(hours=9)
-            assert end <= idx[-1]
-
-    def test_returns_fewer_origins_than_requested_if_series_too_short(self):
-        idx = pd.date_range("2020-01-01", periods=5, freq="h")
-        origins = _select_cv_origins(idx, n_windows=10, horizon_hours=3)
-        assert len(origins) <= 3  # only 3 valid starting positions (0,1,2) for horizon=3 in 5 points
-
-    def test_min_history_hours_pushes_first_origin_past_naive_one_hour_margin(self):
-        """Regression for Finding 1: with lags like [1, 5], a naive 1-hour
-        margin would land the first origin at index[1], leaving lag_5h NaN.
-        min_history_hours=5 must keep every origin at least 5 hours from
-        index[0]."""
-        idx = pd.date_range("2020-01-01", periods=100, freq="h")
-        origins = _select_cv_origins(idx, n_windows=5, horizon_hours=10, min_history_hours=5)
-        assert origins  # sanity: the series is long enough to produce origins
-        for origin in origins:
-            assert origin >= idx[5]
-
-
-class TestScoreStatsmodelsOrigins:
-    def test_scores_each_valid_origin(self):
-        df = _synthetic_train_df()
-        fitted = fit_ets(df["PJME_MW"], {"seasonal_periods": 24, "trend": "add", "seasonal": "add"})
-        origins = _select_cv_origins(df.index, n_windows=2, horizon_hours=5)
-
-        scores = _score_statsmodels_origins(fitted, df["PJME_MW"], origins, horizon_hours=5)
-
-        assert len(scores) == len(origins)
-        assert all(s >= 0 for s in scores)
-
-
-class TestScoreGbmOrigins:
-    def test_scores_each_valid_origin(self):
-        df = _synthetic_train_df()
-
-        class _MeanModel:
-            def predict(self, X):
-                return np.full(len(X), df["PJME_MW"].mean())
-
-        origins = _select_cv_origins(df.index, n_windows=2, horizon_hours=5)
-        scores = _score_gbm_origins(
-            _MeanModel(), df, "PJME_MW", ["lag_1h", "hour"], origins, horizon_hours=5,
-            lags=[1], rolling_windows=[], calendar_features=True, holiday_features=False,
-        )
-
-        assert len(scores) == len(origins)
-        assert all(s >= 0 for s in scores)
 
 
 class TestTrainForecastModels:

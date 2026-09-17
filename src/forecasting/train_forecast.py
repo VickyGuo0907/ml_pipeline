@@ -21,141 +21,12 @@ import numpy as np
 import pandas as pd
 
 from src.forecasting.model_registry import fit_ets, fit_sarimax
-from src.forecasting.recursive import recursive_forecast
+from src.forecasting.rolling_origin import score_gbm_origins, score_statsmodels_origins, select_cv_origins
 from src.utils.config import load_forecast_features_config, load_forecast_models_config, load_pipeline_config
 from src.utils.io import resolve_run_path
 from src.utils.model_registry import get_model
 
 logger = logging.getLogger(__name__)
-
-
-def _mape(actual: pd.Series, predicted: pd.Series) -> float:
-    """Mean absolute percentage error, as a percentage (0-100+ scale).
-
-    Safe for PJM load values (always well above zero); no zero-guard needed
-    for this pipeline's target column.
-    """
-    actual_arr = actual.to_numpy(dtype=float)
-    predicted_arr = predicted.to_numpy(dtype=float)
-    return float(np.mean(np.abs((actual_arr - predicted_arr) / actual_arr)) * 100)
-
-
-def _select_cv_origins(
-    index: pd.DatetimeIndex,
-    n_windows: int,
-    horizon_hours: int,
-    min_history_hours: int = 1,
-) -> list[pd.Timestamp]:
-    """Pick up to n_windows evenly-spaced rolling-origin timestamps from index.
-
-    Each origin leaves at least horizon_hours of real data after it (inclusive
-    of the origin itself), so the true values needed to score that window
-    actually exist in index. Each origin also leaves at least min_history_hours
-    of real data before it — never index[0] itself — so GBM scoring
-    (_score_gbm_origins) has enough real history before the origin for its
-    longest configured lag/rolling window to be fully populated (a naive
-    1-hour margin leaves e.g. lag_168h/rolling_mean_168h as NaN at the first
-    origin, which LightGBM still predicts on, producing a garbage outlier
-    score). statsmodels scoring doesn't need this margin (get_prediction
-    relies on the already-fitted model, not rebuilt lag features), but
-    sharing one origin set keeps both model families scored on identical
-    cutoffs for a fair comparison, so the margin must satisfy GBM's stricter
-    requirement.
-
-    Args:
-        index: Training set's DatetimeIndex (sorted ascending).
-        n_windows: Number of origins to pick.
-        horizon_hours: Forecast horizon — origins within horizon_hours - 1
-            hours of the end of index are excluded.
-        min_history_hours: Minimum real history required before an origin
-            (e.g. max of configured lags/rolling_windows). Defaults to 1,
-            the previous hardcoded minimum.
-
-    Returns:
-        List of up to n_windows Timestamps (fewer if the series is too short
-        to support that many distinct positions), or an empty list if the
-        series can't support even one full horizon plus min_history_hours of
-        history.
-    """
-    usable_start = max(min_history_hours, 1)
-    usable_count = len(index) - horizon_hours + 1
-    if usable_count <= usable_start:
-        return []
-    usable = index[usable_start:usable_count]
-    n = min(n_windows, len(usable))
-    positions = np.linspace(0, len(usable) - 1, n).astype(int)
-    return [usable[p] for p in sorted(set(positions))]
-
-
-def _score_statsmodels_origins(
-    fitted: Any, y: pd.Series, origins: list[pd.Timestamp], horizon_hours: int,
-) -> list[float]:
-    """Score a fitted ETS/SARIMAX result at each origin via dynamic get_prediction.
-
-    Args:
-        fitted: Fitted ETSResultsWrapper or SARIMAXResultsWrapper.
-        y: The full training target series (same series the model was fit on).
-        origins: Rolling-origin timestamps from _select_cv_origins.
-        horizon_hours: Forecast horizon per origin.
-
-    Returns:
-        List of MAPE scores, one per origin that had enough trailing data.
-    """
-    scores = []
-    for origin in origins:
-        end = origin + pd.Timedelta(hours=horizon_hours - 1)
-        if end > y.index[-1]:
-            continue
-        pred = fitted.get_prediction(start=origin, end=end, dynamic=origin).predicted_mean
-        actual = y.loc[origin:end]
-        scores.append(_mape(actual, pred))
-    return scores
-
-
-def _score_gbm_origins(
-    model: Any,
-    train_df: pd.DataFrame,
-    target_col: str,
-    feature_columns: list[str],
-    origins: list[pd.Timestamp],
-    horizon_hours: int,
-    lags: list[int],
-    rolling_windows: list[int],
-    calendar_features: bool,
-    holiday_features: bool,
-) -> list[float]:
-    """Score a fitted GBM model at each origin via recursive_forecast.
-
-    Args:
-        model: Fitted sklearn-compatible estimator.
-        train_df: Full training feature matrix (DatetimeIndex), including target_col.
-        target_col: Target column name.
-        feature_columns: Exact column order the model expects.
-        origins: Rolling-origin timestamps from _select_cv_origins.
-        horizon_hours: Forecast horizon per origin.
-        lags, rolling_windows, calendar_features, holiday_features: Feature
-            config, passed through to recursive_forecast.
-
-    Returns:
-        List of MAPE scores, one per origin that had enough trailing data
-        and at least one hour of history before it.
-    """
-    scores = []
-    y = train_df[target_col]
-    for origin in origins:
-        end = origin + pd.Timedelta(hours=horizon_hours - 1)
-        if end > y.index[-1]:
-            continue
-        history = y.loc[: origin - pd.Timedelta(hours=1)]
-        if history.empty:
-            continue
-        pred = recursive_forecast(
-            model, history, horizon_hours, feature_columns,
-            lags, rolling_windows, calendar_features, holiday_features,
-        )
-        actual = y.loc[origin:end]
-        scores.append(_mape(actual, pred))
-    return scores
 
 
 def train_forecast_models(
@@ -197,7 +68,7 @@ def train_forecast_models(
     mlflow.set_tracking_uri(mlflow_tracking_uri)
     eval_cfg = models_config.evaluation
     min_history_hours = max(features_config.lags + features_config.rolling_windows, default=1)
-    origins = _select_cv_origins(
+    origins = select_cv_origins(
         train_df.index, eval_cfg.n_windows, eval_cfg.horizon_hours, min_history_hours=min_history_hours,
     )
 
@@ -220,7 +91,7 @@ def train_forecast_models(
 
                 if model_cfg.type == "ets":
                     fitted = fit_ets(y_train, model_cfg.hyperparameters)
-                    window_scores = _score_statsmodels_origins(fitted, y_train, origins, eval_cfg.horizon_hours)
+                    window_scores = score_statsmodels_origins(fitted, y_train, origins, eval_cfg.horizon_hours)
                     mlflow.statsmodels.log_model(fitted, name="model")
                 elif model_cfg.type == "sarimax":
                     exog = train_df["is_holiday"] if "is_holiday" in train_df.columns else None
@@ -232,12 +103,12 @@ def train_forecast_models(
                             "proceeding with the unconverged fit's parameters.", model_cfg.name,
                         )
                     mlflow.set_tag("sarimax_converged", fitted.mle_retvals.get("converged", True))
-                    window_scores = _score_statsmodels_origins(fitted, y_train, origins, eval_cfg.horizon_hours)
+                    window_scores = score_statsmodels_origins(fitted, y_train, origins, eval_cfg.horizon_hours)
                     mlflow.statsmodels.log_model(fitted, name="model")
                 elif model_cfg.type == "gbm":
                     model = get_model("gbm", model_cfg.hyperparameters)
                     model.fit(X_train, y_train)
-                    window_scores = _score_gbm_origins(
+                    window_scores = score_gbm_origins(
                         model, train_df, target_col, feature_columns, origins, eval_cfg.horizon_hours,
                         features_config.lags, features_config.rolling_windows,
                         features_config.calendar_features, features_config.holiday_features,
