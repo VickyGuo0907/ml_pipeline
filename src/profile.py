@@ -3,7 +3,12 @@ import logging
 from pathlib import Path
 from typing import Any
 
+import matplotlib
+matplotlib.use("Agg")  # headless — this module runs inside an Airflow worker, never a GUI context
+import matplotlib.pyplot as plt
+import pandas as pd
 import ydata_profiling.model.pandas.describe_categorical_pandas as _ydp_cat
+from statsmodels.tsa.seasonal import MSTL
 from ydata_profiling import ProfileReport
 
 from src.utils.config import load_pipeline_config
@@ -104,3 +109,115 @@ def profile_raw_files(
         logger.info("Report written: %s", report_path)
 
     return profiling_results
+
+
+def generate_mstl_report(
+    raw_dir: str | Path,
+    run_id: str,
+    reports_dir: str | Path = "reports",
+    config_dir: str | Path = "config",
+) -> dict[str, Any]:
+    """Generate an MSTL (multiple seasonal-trend decomposition) diagnostic
+    report for a forecasting pipeline's raw hourly series.
+
+    Independently parses/sorts/dedupes the raw CSV — does NOT share state
+    with the clean stage (which runs after profile in the DAG's fixed task
+    order: ingest -> validate_raw -> profile -> clean -> ...). This is a
+    lightweight, diagnostic-only pass (linear interpolation over any small
+    gaps, not the pipeline's authoritative gap-handling policy), exactly
+    the same independence profile_raw_files already has from clean's output.
+
+    Decomposes into trend + one seasonal component per configured period +
+    residual. Daily (24h) and weekly (168h) periods are always attempted;
+    the annual (8766h) period is only included when the series covers at
+    least two full annual cycles — otherwise MSTL's decomposition for that
+    period would be meaningless (or fail outright for too little data).
+
+    Args:
+        raw_dir: Base directory containing raw data.
+        run_id: Run identifier to locate data.
+        reports_dir: Output directory for the HTML report.
+        config_dir: Pipeline config directory.
+
+    Returns:
+        Dictionary with report_path and the list of periods actually used.
+
+    Raises:
+        FileNotFoundError: If the raw manifest is absent.
+        ValueError: If the raw directory doesn't have exactly one file.
+    """
+    raw_path = resolve_run_path(raw_dir, run_id)
+    manifest = load_manifest(raw_path)  # raises FileNotFoundError if absent
+
+    files = list(manifest.get("files", {}))
+    if len(files) != 1:
+        raise ValueError(
+            f"Expected exactly one raw file for a forecasting pipeline, found "
+            f"{len(files)}: {files}"
+        )
+    filename = files[0]
+    reader = READERS.get(Path(filename).suffix.lower())
+    if reader is None:
+        raise ValueError(f"Unsupported file format: {filename}")
+
+    pipeline_config = load_pipeline_config(config_dir)
+    target_col = pipeline_config.target.name
+
+    df = reader(raw_path / filename)
+    df["Datetime"] = pd.to_datetime(df["Datetime"])
+    df = df.sort_values("Datetime").drop_duplicates(subset="Datetime", keep="first")
+    df = df.set_index("Datetime")
+
+    full_range = pd.date_range(df.index.min(), df.index.max(), freq="h", name="Datetime")
+    series = df[target_col].reindex(full_range).interpolate(method="linear")
+
+    DAILY, WEEKLY, ANNUAL = 24, 168, 8766
+    periods = [DAILY, WEEKLY]
+    if len(series) >= 2 * ANNUAL:
+        periods.append(ANNUAL)
+
+    result = MSTL(series, periods=periods).fit()
+
+    reports_path = Path(reports_dir)
+    reports_path.mkdir(parents=True, exist_ok=True)
+    report_path = reports_path / f"{run_id}_mstl.html"
+
+    n_panels = 2 + len(periods)  # trend + one per seasonal period + residual
+    fig, axes = plt.subplots(n_panels, 1, figsize=(12, 3 * n_panels), sharex=True)
+
+    axes[0].plot(result.trend.index, result.trend.values)
+    axes[0].set_title("Trend")
+
+    for i, period in enumerate(periods, start=1):
+        col = f"seasonal_{period}"
+        axes[i].plot(result.seasonal[col].index, result.seasonal[col].values)
+        label = {DAILY: "Daily (24h)", WEEKLY: "Weekly (168h)", ANNUAL: "Annual (8766h)"}.get(
+            period, f"{period}h"
+        )
+        axes[i].set_title(f"Seasonal — {label}")
+
+    axes[-1].plot(result.resid.index, result.resid.values)
+    axes[-1].set_title("Residual")
+
+    fig.suptitle(f"MSTL Decomposition — {filename} ({run_id})")
+    fig.tight_layout()
+
+    import io
+    import base64
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png")
+    plt.close(fig)
+    buf.seek(0)
+    img_b64 = base64.b64encode(buf.read()).decode("ascii")
+
+    html = (
+        f"<html><head><title>MSTL Decomposition — {run_id}</title></head>"
+        f"<body><h1>MSTL Decomposition — {filename} ({run_id})</h1>"
+        f"<p>Periods used: {periods}</p>"
+        f'<img src="data:image/png;base64,{img_b64}" alt="MSTL decomposition: trend, seasonal, residual" />'
+        f"</body></html>"
+    )
+    report_path.write_text(html)
+
+    logger.info("MSTL report written: %s (periods=%s)", report_path, periods)
+    return {"report_path": str(report_path), "periods_used": periods}
