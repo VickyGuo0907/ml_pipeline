@@ -85,6 +85,26 @@ class TestBuildFeatureRow:
         )
         assert np.isnan(row["lag_10h"])
 
+    def test_rolling_stat_is_nan_when_window_not_fully_populated(self):
+        """Matches pd.Series.rolling(window).mean()/std() default min_periods=window
+        behavior: a window straddling the start of history (some but not all
+        real values) must produce NaN, not a skipna average over what's there."""
+        idx = pd.date_range("2020-01-01", periods=5, freq="h")
+        buffer = pd.Series(range(5), index=idx, dtype=float)  # values 0..4
+        # Predicting at 2020-01-01 02:00:00 with window=3 requires hours -1h,-2h,-3h
+        # which reaches before buffer's start, so one of the 3 values will be NaN
+        ts = idx[0] + pd.Timedelta(hours=1)  # 2020-01-01 01:00:00
+
+        row = _build_feature_row(
+            buffer, ts, lags=[], rolling_windows=[3],
+            calendar_features=False, holiday_features=False, holidays=None,
+        )
+
+        # Window of 3 hours: [h-1, h-2, h-3] = [00:00 (0.0), 2019-12-31 23:00 (nan), 2019-12-31 22:00 (nan)]
+        # Has NaN values, so result must be NaN (not skipna mean)
+        assert np.isnan(row["rolling_mean_3h"])
+        assert np.isnan(row["rolling_std_3h"])
+
 
 class TestRecursiveForecast:
     def test_output_length_and_index_continue_from_history(self):

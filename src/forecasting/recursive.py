@@ -61,8 +61,14 @@ def _build_feature_row(
         window_vals = pd.Series([
             buffer.get(ts - pd.Timedelta(hours=h), np.nan) for h in range(1, window + 1)
         ])
-        row[f"rolling_mean_{window}h"] = window_vals.mean()
-        row[f"rolling_std_{window}h"] = window_vals.std()
+        # Match pd.Series.rolling(window).mean()/std() default: min_periods=window,
+        # so NaN if any position in the window is missing (not skipna average).
+        if window_vals.isna().any():
+            row[f"rolling_mean_{window}h"] = np.nan
+            row[f"rolling_std_{window}h"] = np.nan
+        else:
+            row[f"rolling_mean_{window}h"] = window_vals.mean()
+            row[f"rolling_std_{window}h"] = window_vals.std()
     if calendar_features:
         row["hour"] = ts.hour
         row["day_of_week"] = ts.dayofweek
