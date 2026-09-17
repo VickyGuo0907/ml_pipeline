@@ -8,6 +8,23 @@ the test set, statsmodels scored with dynamic=False since origins are
 out-of-sample — passing dynamic=origin for an out-of-sample point raises for
 ETSModel and is a no-op for SARIMAX, so dynamic=False is the one setting
 that works correctly for both model types on out-of-sample data).
+
+CAVEAT (dynamic=False / out-of-sample scoring only): statsmodels' get_prediction
+does not re-anchor a fresh horizon-length forecast at each origin the way
+score_gbm_origins does. It produces one continuous forecast starting right
+after the fitted sample's end, and start=origin/end=end just slices that
+continuous forecast. That means the model's effective forecast lead time at a
+given origin is (origin - train_end) + horizon_hours, not horizon_hours — it
+grows the further an origin sits past the end of training. So for
+dynamic=False, test_mape from this function is NOT strictly horizon-anchored
+the way GBM's score_gbm_origins is, and the two are not directly comparable
+in an apples-to-apples sense. This is a known limitation, not a bug; a proper
+fix (re-anchoring each origin via e.g. SARIMAXResults.append(refit=False) or
+ETSModel(hist).smooth(params)) is a real algorithmic change, deliberately out
+of scope here — see evaluate_forecast.py's module docstring for the same
+caveat applied to test_mape_mean. This caveat does NOT apply to dynamic=True
+(in-sample CV), where sharing one origin set does keep both model families on
+identical, horizon-anchored cutoffs.
 """
 from typing import Any
 
@@ -46,9 +63,12 @@ def select_cv_origins(
     origin, which LightGBM still predicts on, producing a garbage outlier
     score). statsmodels scoring doesn't need this margin (get_prediction
     relies on the already-fitted model, not rebuilt lag features), but
-    sharing one origin set keeps both model families scored on identical
-    cutoffs for a fair comparison, so the margin must satisfy GBM's stricter
-    requirement.
+    sharing one origin set keeps both model families scored at identical
+    cutoff timestamps, so the margin must satisfy GBM's stricter requirement.
+    Note: identical cutoffs is NOT the same as an apples-to-apples comparison
+    for out-of-sample (dynamic=False) scoring — see score_statsmodels_origins'
+    module-level caveat below for why statsmodels' effective forecast horizon
+    at a shared cutoff is not horizon_hours the way GBM's is.
 
     Args:
         index: The DatetimeIndex to pick origins from (training set for CV,
@@ -81,6 +101,7 @@ def score_statsmodels_origins(
     origins: list[pd.Timestamp],
     horizon_hours: int,
     dynamic: bool = True,
+    exog: pd.Series | pd.DataFrame | None = None,
 ) -> list[float]:
     """Score a fitted ETS/SARIMAX result at each origin via get_prediction.
 
@@ -101,18 +122,35 @@ def score_statsmodels_origins(
             out-of-sample point; harmless but pointless for SARIMAX, which
             just warns "has no effect" and produces the same result either
             way, since every out-of-sample prediction is already a genuine
-            simulation).
+            simulation). See this module's docstring for a caveat on what
+            dynamic=False scoring actually measures.
+        exog: Exogenous regressor values covering the full range in `y`,
+            required only when `fitted` was fit with exog (e.g. SARIMAX with
+            use_holiday_exog) AND dynamic=False (out-of-sample). statsmodels'
+            out-of-sample get_prediction needs exog for every step from the
+            end of the fitted sample through `end` — not just origin:end — so
+            this function slices `exog` from just past the fitted sample's
+            end through each origin's `end` itself. Ignored when dynamic=True
+            (in-sample predictions reuse the exog already stored in `fitted`)
+            or when the model has no exog component.
 
     Returns:
         List of MAPE scores, one per origin that had enough trailing data.
     """
     scores = []
+    # Only needed for the dynamic=False + exog case; resolved once up front
+    # since it's the same for every origin (the fitted sample's end doesn't
+    # move between origins).
+    train_end = pd.Timestamp(fitted.model.data.dates[-1]) if exog is not None else None
     for origin in origins:
         end = origin + pd.Timedelta(hours=horizon_hours - 1)
         if end > y.index[-1]:
             continue
         if dynamic:
             pred = fitted.get_prediction(start=origin, end=end, dynamic=origin).predicted_mean
+        elif exog is not None:
+            exog_window = exog.loc[train_end + pd.Timedelta(hours=1): end]
+            pred = fitted.get_prediction(start=origin, end=end, exog=exog_window).predicted_mean
         else:
             pred = fitted.get_prediction(start=origin, end=end).predicted_mean
         actual = y.loc[origin:end]

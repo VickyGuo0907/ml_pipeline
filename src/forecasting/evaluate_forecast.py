@@ -14,6 +14,15 @@ train+test history to draw lag features from.
 
 NO auto-promotion to Production — manual UI click only, mirrors the
 tabular src/evaluate.py's registration pattern exactly.
+
+CAVEAT on test_mape_mean for ets/sarimax: this stage scores statsmodels
+models with dynamic=False (out-of-sample), which is NOT horizon-anchored the
+way GBM's test_mape_mean is — see src/forecasting/rolling_origin.py's module
+docstring for why. In short, an ets/sarimax test_mape_mean reflects a forecast
+lead time that grows with how far each origin sits past the end of training,
+while GBM's reflects a genuine fresh horizon_hours-ahead forecast at every
+origin. Do not treat test_mape_mean as an apples-to-apples number across
+model families when comparing ets/sarimax to gbm.
 """
 import logging
 from datetime import datetime, timezone
@@ -89,7 +98,10 @@ def register_forecast_models_to_mlflow(
     Raises:
         ValueError: If mlflow_run_ids or features_dir is missing, or if no
             model could be registered.
-        RuntimeError: If any model fails to register due to an infrastructure error.
+        RuntimeError: If any model fails to score or register — infrastructure
+            error (e.g. MLflow unreachable) or a modeling/scoring error (e.g.
+            a model missing exog it was fit with) are both reported this way;
+            see the per-model "error" field in the written report for which.
     """
     if not mlflow_run_ids:
         raise ValueError("mlflow_run_ids required for model registration")
@@ -106,7 +118,8 @@ def register_forecast_models_to_mlflow(
     features_path = resolve_run_path(features_dir, run_id)
     train_df = pd.read_parquet(features_path / "train.parquet")
     test_df = pd.read_parquet(features_path / "test.parquet")
-    full_y = pd.concat([train_df[target_col], test_df[target_col]]).sort_index()
+    full_df = pd.concat([train_df, test_df]).sort_index()
+    full_y = full_df[target_col]
     feature_columns = [c for c in train_df.columns if c != target_col]
 
     origins = select_cv_origins(test_df.index, eval_cfg.n_windows, eval_cfg.horizon_hours)
@@ -131,12 +144,18 @@ def register_forecast_models_to_mlflow(
             model_uri = f"runs:/{mlflow_run_id}/model"
             if model_type in ("ets", "sarimax"):
                 loaded = mlflow.statsmodels.load_model(model_uri)
+                # SARIMAX fit with use_holiday_exog (see model_registry.fit_sarimax)
+                # needs its exog column re-supplied for out-of-sample scoring —
+                # k_exog > 0 tells us the loaded model actually has a regression
+                # component (ETS never does; SARIMAX only does when configured).
+                exog = None
+                if getattr(loaded.model, "k_exog", 0) > 0 and "is_holiday" in full_df.columns:
+                    exog = full_df["is_holiday"]
                 window_scores = score_statsmodels_origins(
-                    loaded, full_y, origins, eval_cfg.horizon_hours, dynamic=False,
+                    loaded, full_y, origins, eval_cfg.horizon_hours, dynamic=False, exog=exog,
                 )
             elif model_type == "gbm":
                 loaded = mlflow.lightgbm.load_model(model_uri)
-                full_df = pd.concat([train_df, test_df]).sort_index()
                 window_scores = score_gbm_origins(
                     loaded, full_df, target_col, feature_columns, origins, eval_cfg.horizon_hours,
                     features_cfg.lags, features_cfg.rolling_windows,
