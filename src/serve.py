@@ -34,10 +34,15 @@ from contextlib import asynccontextmanager
 from typing import Any, Optional
 
 import mlflow
+import mlflow.lightgbm
 import mlflow.pyfunc
+import mlflow.statsmodels
 import pandas as pd
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel, Field, RootModel
+
+from src.forecasting.serve_forecast import forecast_with_gbm, forecast_with_statsmodels, load_latest_snapshot
+from src.utils.config import load_forecast_features_config
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +62,16 @@ _model_cache: dict[str, Any] = {
     "boxcox_offset": None,
     "feature_columns": None,
     "target_col": None,
+    # Forecasting-specific — None/False for every tabular model, so /health,
+    # /schema, and POST /predict behave exactly as before for existing
+    # deployments. Populated only when _load_model detects cv_mape_mean.
+    "is_forecasting": False,
+    "forecast_model_type": None,
+    "pipeline_type": None,
+    "lags": None,
+    "rolling_windows": None,
+    "calendar_features": None,
+    "holiday_features": None,
 }
 
 
@@ -86,7 +101,6 @@ def _load_model(model_name: str) -> dict[str, Any] | None:
 
             version = versions[0]
             model_uri = f"models:/{model_name}/{stage}"
-            model = mlflow.pyfunc.load_model(model_uri)
             run = client.get_run(version.run_id)
 
             boxcox_lambda: float | None = None
@@ -115,10 +129,49 @@ def _load_model(model_name: str) -> dict[str, Any] | None:
                     FEATURE_COLUMNS_ARTIFACT, model_name, version.version, version.run_id, e,
                 )
 
+            # A cv_mape_mean metric is logged only by the forecasting training
+            # stage (src/forecasting/train_forecast.py) — never by the tabular
+            # one. This is the sole signal used to route to the forecasting
+            # load path, so no pipeline name is ever hardcoded here.
+            is_forecasting = "cv_mape_mean" in run.data.metrics
+            forecast_model_type: str | None = None
+            pipeline_type: str | None = None
+            lags: list[int] | None = None
+            rolling_windows: list[int] | None = None
+            calendar_features: bool | None = None
+            holiday_features: bool | None = None
+
+            if is_forecasting:
+                forecast_model_type = run.data.tags.get("model_type")
+                pipeline_type = run.data.tags.get("pipeline_type")
+                if forecast_model_type in ("ets", "sarimax"):
+                    model = mlflow.statsmodels.load_model(model_uri)
+                elif forecast_model_type == "gbm":
+                    model = mlflow.lightgbm.load_model(model_uri)
+                else:
+                    logger.warning(
+                        "Unknown forecasting model_type '%s' for %s v%s — cannot select "
+                        "an MLflow flavor to load it with.", forecast_model_type, model_name, version.version,
+                    )
+                    continue
+                if pipeline_type:
+                    try:
+                        features_cfg = load_forecast_features_config(f"config/{pipeline_type}")
+                        lags = features_cfg.lags
+                        rolling_windows = features_cfg.rolling_windows
+                        calendar_features = features_cfg.calendar_features
+                        holiday_features = features_cfg.holiday_features
+                    except Exception as e:
+                        logger.warning(
+                            "Could not load forecast feature config for pipeline '%s': %s", pipeline_type, e,
+                        )
+            else:
+                model = mlflow.pyfunc.load_model(model_uri)
+
             logger.info(
-                "Loaded %s v%s from %s (target_col=%s, %s features, boxcox_lambda=%s, boxcox_offset=%s)",
+                "Loaded %s v%s from %s (target_col=%s, %s features, is_forecasting=%s, boxcox_lambda=%s)",
                 model_name, version.version, stage, target_col,
-                len(feature_columns) if feature_columns else "unknown", boxcox_lambda, boxcox_offset,
+                len(feature_columns) if feature_columns else "unknown", is_forecasting, boxcox_lambda,
             )
             return {
                 "model": model,
@@ -129,6 +182,13 @@ def _load_model(model_name: str) -> dict[str, Any] | None:
                 "boxcox_offset": boxcox_offset,
                 "feature_columns": feature_columns,
                 "target_col": target_col,
+                "is_forecasting": is_forecasting,
+                "forecast_model_type": forecast_model_type,
+                "pipeline_type": pipeline_type,
+                "lags": lags,
+                "rolling_windows": rolling_windows,
+                "calendar_features": calendar_features,
+                "holiday_features": holiday_features,
             }
         except Exception as e:
             logger.debug("No %s model for %s: %s", stage, model_name, e)
@@ -241,6 +301,24 @@ class PredictionOutput(BaseModel):
     model_stage: str
 
 
+class ForecastPoint(BaseModel):
+    """One timestamped forecast value."""
+
+    timestamp: str
+    prediction: float
+
+
+class ForecastOutput(BaseModel):
+    """Multi-step forecast output."""
+
+    predictions: list[ForecastPoint]
+    horizon_hours: int
+    model_name: str
+    model_version: str
+    model_stage: str
+    forecast_model_type: str
+
+
 @app.get("/health", response_model=HealthResponse)
 async def health() -> HealthResponse:
     """Health check — reports model name, version, stage, and predicted target."""
@@ -330,3 +408,62 @@ async def predict(data: PredictionInput) -> PredictionOutput:
     except Exception as e:
         logger.error("Prediction failed: %s", e)
         raise HTTPException(status_code=500, detail=f"Prediction failed: {str(e)}")
+
+
+MAX_FORECAST_HORIZON_HOURS = 168  # 1 week — a sane upper bound on a single request
+
+
+@app.get("/predict/forecast", response_model=ForecastOutput)
+async def predict_forecast(
+    horizon_hours: int = Query(..., gt=0, le=MAX_FORECAST_HORIZON_HOURS),
+) -> ForecastOutput:
+    """Forecast horizon_hours ahead using whichever forecasting model
+    SERVING_MODEL_NAME points at. Returns 400 if the currently loaded model
+    is not a forecasting model — use POST /predict for tabular models.
+    """
+    if not _model_cache.get("is_forecasting"):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Loaded model '{SERVING_MODEL_NAME}' is not a forecasting model. "
+                "Use POST /predict for tabular models."
+            ),
+        )
+    if _model_cache.get("model") is None:
+        raise HTTPException(status_code=503, detail=f"No model loaded for '{SERVING_MODEL_NAME}'.")
+
+    forecast_model_type = _model_cache["forecast_model_type"]
+    try:
+        if forecast_model_type in ("ets", "sarimax"):
+            series = forecast_with_statsmodels(_model_cache["model"], horizon_hours)
+        elif forecast_model_type == "gbm":
+            pipeline_type = _model_cache.get("pipeline_type")
+            snapshot = load_latest_snapshot(f"data/{pipeline_type}/features") if pipeline_type else None
+            if snapshot is None:
+                raise HTTPException(
+                    status_code=503,
+                    detail="No feature snapshot available yet — run the pipeline's DAG at least once.",
+                )
+            series = forecast_with_gbm(
+                _model_cache["model"], snapshot, _model_cache["target_col"], _model_cache["feature_columns"],
+                horizon_hours, _model_cache["lags"], _model_cache["rolling_windows"],
+                _model_cache["calendar_features"], _model_cache["holiday_features"],
+            )
+        else:
+            raise HTTPException(status_code=500, detail=f"Unknown forecast_model_type '{forecast_model_type}'.")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Forecast failed: %s", e)
+        raise HTTPException(status_code=500, detail=f"Forecast failed: {str(e)}")
+
+    return ForecastOutput(
+        predictions=[
+            ForecastPoint(timestamp=str(ts), prediction=float(val)) for ts, val in series.items()
+        ],
+        horizon_hours=horizon_hours,
+        model_name=_model_cache["model_name"],
+        model_version=str(_model_cache["model_version"]),
+        model_stage=_model_cache["model_stage"],
+        forecast_model_type=forecast_model_type,
+    )
