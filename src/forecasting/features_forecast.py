@@ -77,7 +77,11 @@ def engineer_forecast_features(
 
     if features_config.holiday_features:
         calendar = USFederalHolidayCalendar()
-        holidays = calendar.holidays(start=feature_df.index.min(), end=feature_df.index.max())
+        padding = pd.Timedelta(days=40)
+        holidays = calendar.holidays(
+            start=feature_df.index.min() - padding,
+            end=feature_df.index.max() + padding,
+        )
         normalized = feature_df.index.normalize()
         feature_df["is_holiday"] = normalized.isin(holidays)
         holiday_arr = holidays.values

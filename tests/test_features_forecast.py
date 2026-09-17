@@ -260,3 +260,47 @@ class TestManifestAndReturn:
             manifest = yaml.safe_load(f)
         assert manifest["stage"] == "feature_engineer_forecast"
         assert "PJME_MW" not in manifest["feature_columns"]
+
+
+class TestHolidayPaddingRegression:
+    """Regression test for holiday-window padding: ensures days_to_nearest_holiday
+    doesn't create NaN for every row when the data span contains no holidays."""
+
+    def test_days_to_nearest_holiday_populated_when_no_holidays_in_range(self, tmp_path):
+        """Date range 2025-01-05 to 2025-01-12 contains no US Federal holidays,
+        but is within 40 days of both New Year's Day (Jan 1) and MLK Jr. Day (Jan 15-21).
+        With padding, days_to_nearest_holiday should be populated (not NaN) for all rows,
+        and train/test outputs should be non-empty (not silently dropped by dropna)."""
+        interim_dir = tmp_path / "interim"
+        features_dir = tmp_path / "features"
+        config_dir = tmp_path / "config"
+        run_id = "2025-01-05"
+
+        # 8-day series, 2025-01-05 to 2025-01-12, no holidays in range
+        # but within 40 days of nearby holidays
+        df = _synthetic_series(8 * 24, start="2025-01-05")  # 8 days of hourly data
+        _write_interim_fixture(interim_dir, run_id, df)
+        _write_forecast_config(
+            config_dir,
+            lags=[1],
+            rolling_windows=[],
+            snapshot_hours=3,
+            holiday_features=True,
+        )
+
+        engineer_forecast_features(interim_dir, features_dir, run_id, config_dir=config_dir)
+
+        train_df = pd.read_parquet(features_dir / run_id / "train.parquet")
+        test_df = pd.read_parquet(features_dir / run_id / "test.parquet")
+        full = pd.concat([train_df, test_df]).sort_index()
+
+        # Regression: output should not be empty
+        assert len(full) > 0, "Output was silently dropped to 0 rows due to NaN in days_to_nearest_holiday"
+        assert len(train_df) > 0, "Train set is empty"
+        assert len(test_df) > 0, "Test set is empty"
+
+        # Regression: days_to_nearest_holiday should be populated (not all NaN)
+        assert full["days_to_nearest_holiday"].notna().all(), \
+            "days_to_nearest_holiday contains NaN values (holiday padding failed)"
+        assert (full["days_to_nearest_holiday"] > 0).all(), \
+            "All rows should have positive distance to nearby holidays"
