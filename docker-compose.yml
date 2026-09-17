@@ -209,6 +209,10 @@ services:
     volumes:
       - ${PWD}/src:/app/src
       - ${PWD}/config:/app/config
+      # Read-only: live forecast serving reads the latest run's
+      # last_window.parquet snapshot (written by engineer_forecast_features)
+      # to seed GBM's recursive forecasting — it never writes to data/.
+      - ${PWD}/data:/app/data:ro
       # Must mount at the same absolute path mlflow-server and airflow-scheduler use
       # (/mlflow-artifacts). MLflow's local-filesystem artifact store resolves model
       # artifact URIs as bare absolute paths, read directly off disk by the client —
