@@ -440,6 +440,12 @@ class ForecastEvaluationConfig(BaseModel):
     n_windows: int = Field(
         default=5, ge=1, description="Number of rolling-origin windows sampled across the test period",
     )
+    # Single-value Literal today because MAPE is the only metric this pipeline
+    # computes (rolling-origin CV) — unlike the tabular ModelsConfig.champion_metric,
+    # which genuinely picks between two independently-computed metrics
+    # (test_rmse/cv_r2). Widen this Literal only when a second forecasting
+    # metric is actually implemented; a value with nothing to choose between
+    # isn't a design gap worth fixing pre-emptively.
     champion_metric: Literal["cv_mape"] = Field(
         default="cv_mape",
         description="How the run champion is chosen - average MAPE across rolling-origin windows",

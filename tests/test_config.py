@@ -426,3 +426,25 @@ def test_load_pjm_forecast_orchestration_config():
     assert config.dag.dag_id == "pjm_load_forecast_pipeline"
     assert config.directories.landing == "data/pjm_load_forecast/landing"
     assert config.directories.config == "config/pjm_load_forecast"
+
+
+def test_forecast_configs_reexported_from_utils_package():
+    """Forecast config classes/loaders are importable from src.utils directly,
+    matching how the tabular config classes are already re-exported there."""
+    from src.utils import (
+        ForecastCleaningConfig,
+        ForecastEvaluationConfig,
+        ForecastFeaturesConfig,
+        ForecastModelsConfig,
+        load_forecast_cleaning_config,
+        load_forecast_features_config,
+        load_forecast_models_config,
+    )
+
+    assert ForecastCleaningConfig is not None
+    assert ForecastEvaluationConfig is not None
+    assert ForecastFeaturesConfig is not None
+    assert ForecastModelsConfig is not None
+    assert callable(load_forecast_cleaning_config)
+    assert callable(load_forecast_features_config)
+    assert callable(load_forecast_models_config)

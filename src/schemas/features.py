@@ -30,6 +30,12 @@ def build_forecast_features_schema(target_col: str) -> DataFrameSchema:
     prevents a plain integer target column from silently coercing to float and
     masking type mismatches.
 
+    The index dtype ("datetime64[ns]") is tz-naive and will reject a tz-aware
+    index. This is intentional, not a gap: engineer_forecast_features always
+    builds a naive pd.date_range/DatetimeIndex, and PJM's source data has no
+    timezone information to begin with, so a tz-aware index never legitimately
+    reaches this schema.
+
     Args:
         target_col: Target column name from pipeline.yaml (e.g. 'PJME_MW').
 
