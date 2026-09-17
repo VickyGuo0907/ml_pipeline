@@ -4,6 +4,8 @@ Airflow's DAG/PythonOperator can be constructed without a running
 scheduler or initialized metadata DB - these tests build DAG objects
 directly and inspect their structure, they do not execute any task.
 """
+from pathlib import Path
+
 from src.dags.dag_factory import (
     _select_features_schema_builder,
     _select_forecasting_stage_functions,
@@ -59,3 +61,19 @@ def test_hospital_readmission_lagged_dag_still_builds_unchanged():
     dag = build_dag(config)
     assert dag.dag_id == "hospital_readmission_lagged_pipeline"
     assert "07_train_models" in dag.task_ids
+
+
+def test_dispatch_wrapper_docstrings_are_dispatch_aware():
+    """clean_wrapper/features_wrapper/train_wrapper's docstrings must not claim
+    tabular-only behavior (encode/Box-Cox/VIF, R²/RMSE) now that all three
+    dispatch to a different function per problem_type — profile_wrapper
+    already sets the standard these three should match."""
+    source = Path("src/dags/dag_factory.py").read_text()
+
+    # The stale tabular-only phrasings must be gone...
+    assert "Clean raw data: impute, drop bad cols, dedup." not in source
+    assert "Engineer features: encode, Box-Cox, VIF, scale, split." not in source
+    assert "Train all models and log R² + RMSE to MLflow." not in source
+
+    # ...replaced by dispatch-aware language, mirroring profile_wrapper's own.
+    assert "forecasting pipelines" in source

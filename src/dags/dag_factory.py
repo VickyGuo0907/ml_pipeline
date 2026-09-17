@@ -182,7 +182,9 @@ def build_dag(config: OrchestrationConfig) -> DAG:
         return result
 
     def clean_wrapper(**context) -> dict:
-        """Clean raw data: impute, drop bad cols, dedup."""
+        """Clean raw data. Tabular pipelines: impute, drop bad cols, dedup.
+        Forecasting pipelines: gap detection/fill on the hourly series
+        (dispatched via _clean_fn, set above from problem_type)."""
         return _clean_fn(
             raw_dir=config.directories.raw,
             interim_dir=config.directories.interim,
@@ -191,7 +193,10 @@ def build_dag(config: OrchestrationConfig) -> DAG:
         )
 
     def features_wrapper(**context) -> dict:
-        """Engineer features: encode, Box-Cox, VIF, scale, split."""
+        """Engineer features. Tabular pipelines: encode, Box-Cox, VIF, scale,
+        split. Forecasting pipelines: lag/rolling/calendar/holiday features,
+        chronological split (dispatched via _features_fn, set above from
+        problem_type)."""
         return _features_fn(
             interim_dir=config.directories.interim,
             features_dir=config.directories.features,
@@ -240,7 +245,9 @@ def build_dag(config: OrchestrationConfig) -> DAG:
         )
 
     def train_wrapper(**context) -> dict:
-        """Train all models and log R² + RMSE to MLflow."""
+        """Train all models. Tabular pipelines: log R² + RMSE to MLflow.
+        Forecasting pipelines: rolling-origin CV, log cv_mape_mean/cv_mape_std
+        (dispatched via _train_fn, set above from problem_type)."""
         result = _train_fn(
             features_dir=config.directories.features,
             run_id=_pull_run_id(context),
