@@ -40,34 +40,48 @@ def _mape(actual: pd.Series, predicted: pd.Series) -> float:
     return float(np.mean(np.abs((actual_arr - predicted_arr) / actual_arr)) * 100)
 
 
-def _select_cv_origins(index: pd.DatetimeIndex, n_windows: int, horizon_hours: int) -> list[pd.Timestamp]:
+def _select_cv_origins(
+    index: pd.DatetimeIndex,
+    n_windows: int,
+    horizon_hours: int,
+    min_history_hours: int = 1,
+) -> list[pd.Timestamp]:
     """Pick up to n_windows evenly-spaced rolling-origin timestamps from index.
 
     Each origin leaves at least horizon_hours of real data after it (inclusive
     of the origin itself), so the true values needed to score that window
-    actually exist in index. Each origin also leaves at least one hour of real
-    data before it — never index[0] itself — so GBM scoring
-    (_score_gbm_origins) always has at least one point of history to seed
-    recursive_forecast's buffer with; statsmodels scoring doesn't need this
-    margin (get_prediction relies on the already-fitted model, not raw
-    history), but sharing one origin set keeps both model families scored on
-    identical cutoffs for a fair comparison.
+    actually exist in index. Each origin also leaves at least min_history_hours
+    of real data before it — never index[0] itself — so GBM scoring
+    (_score_gbm_origins) has enough real history before the origin for its
+    longest configured lag/rolling window to be fully populated (a naive
+    1-hour margin leaves e.g. lag_168h/rolling_mean_168h as NaN at the first
+    origin, which LightGBM still predicts on, producing a garbage outlier
+    score). statsmodels scoring doesn't need this margin (get_prediction
+    relies on the already-fitted model, not rebuilt lag features), but
+    sharing one origin set keeps both model families scored on identical
+    cutoffs for a fair comparison, so the margin must satisfy GBM's stricter
+    requirement.
 
     Args:
         index: Training set's DatetimeIndex (sorted ascending).
         n_windows: Number of origins to pick.
         horizon_hours: Forecast horizon — origins within horizon_hours - 1
             hours of the end of index are excluded.
+        min_history_hours: Minimum real history required before an origin
+            (e.g. max of configured lags/rolling_windows). Defaults to 1,
+            the previous hardcoded minimum.
 
     Returns:
         List of up to n_windows Timestamps (fewer if the series is too short
         to support that many distinct positions), or an empty list if the
-        series can't support even one full horizon plus one hour of history.
+        series can't support even one full horizon plus min_history_hours of
+        history.
     """
+    usable_start = max(min_history_hours, 1)
     usable_count = len(index) - horizon_hours + 1
-    if usable_count <= 1:
+    if usable_count <= usable_start:
         return []
-    usable = index[1:usable_count]
+    usable = index[usable_start:usable_count]
     n = min(n_windows, len(usable))
     positions = np.linspace(0, len(usable) - 1, n).astype(int)
     return [usable[p] for p in sorted(set(positions))]
@@ -182,7 +196,10 @@ def train_forecast_models(
 
     mlflow.set_tracking_uri(mlflow_tracking_uri)
     eval_cfg = models_config.evaluation
-    origins = _select_cv_origins(train_df.index, eval_cfg.n_windows, eval_cfg.horizon_hours)
+    min_history_hours = max(features_config.lags + features_config.rolling_windows, default=1)
+    origins = _select_cv_origins(
+        train_df.index, eval_cfg.n_windows, eval_cfg.horizon_hours, min_history_hours=min_history_hours,
+    )
 
     training_results: dict[str, Any] = {"run_id": run_id, "models": {}}
 
@@ -208,6 +225,13 @@ def train_forecast_models(
                 elif model_cfg.type == "sarimax":
                     exog = train_df["is_holiday"] if "is_holiday" in train_df.columns else None
                     fitted = fit_sarimax(y_train, model_cfg.hyperparameters, exog=exog)
+                    if not fitted.mle_retvals.get("converged", True):
+                        logger.warning(
+                            "SARIMAX fit for %s did not converge (order/seasonal_order are "
+                            "fixed, not searched, so this can happen on some data spans) — "
+                            "proceeding with the unconverged fit's parameters.", model_cfg.name,
+                        )
+                    mlflow.set_tag("sarimax_converged", fitted.mle_retvals.get("converged", True))
                     window_scores = _score_statsmodels_origins(fitted, y_train, origins, eval_cfg.horizon_hours)
                     mlflow.statsmodels.log_model(fitted, name="model")
                 elif model_cfg.type == "gbm":

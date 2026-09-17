@@ -95,6 +95,17 @@ class TestSelectCvOrigins:
         origins = _select_cv_origins(idx, n_windows=10, horizon_hours=3)
         assert len(origins) <= 3  # only 3 valid starting positions (0,1,2) for horizon=3 in 5 points
 
+    def test_min_history_hours_pushes_first_origin_past_naive_one_hour_margin(self):
+        """Regression for Finding 1: with lags like [1, 5], a naive 1-hour
+        margin would land the first origin at index[1], leaving lag_5h NaN.
+        min_history_hours=5 must keep every origin at least 5 hours from
+        index[0]."""
+        idx = pd.date_range("2020-01-01", periods=100, freq="h")
+        origins = _select_cv_origins(idx, n_windows=5, horizon_hours=10, min_history_hours=5)
+        assert origins  # sanity: the series is long enough to produce origins
+        for origin in origins:
+            assert origin >= idx[5]
+
 
 class TestScoreStatsmodelsOrigins:
     def test_scores_each_valid_origin(self):
