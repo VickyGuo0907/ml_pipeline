@@ -262,23 +262,54 @@ class TestManifestAndReturn:
         assert "PJME_MW" not in manifest["feature_columns"]
 
 
+class TestOutputDtypes:
+    def test_all_output_columns_are_numeric(self, tmp_path):
+        """Every column must be numeric — dag_factory.py's validate_features_wrapper
+        rejects any non-numeric column (bool included, since pandas' select_dtypes
+        excludes bool from "number") for every real run of this pipeline."""
+        interim_dir = tmp_path / "interim"
+        features_dir = tmp_path / "features"
+        config_dir = tmp_path / "config"
+        run_id = "2019-07-01"
+
+        df = _synthetic_series(48, start="2019-07-01")  # spans July 4, 2019
+        _write_interim_fixture(interim_dir, run_id, df)
+        _write_forecast_config(
+            config_dir,
+            lags=[1],
+            rolling_windows=[],
+            snapshot_hours=3,
+            calendar_features=True,
+            holiday_features=True,
+        )
+
+        engineer_forecast_features(interim_dir, features_dir, run_id, config_dir=config_dir)
+
+        train_df = pd.read_parquet(features_dir / run_id / "train.parquet")
+        assert train_df.select_dtypes(exclude="number").empty
+
+
 class TestHolidayPaddingRegression:
     """Regression test for holiday-window padding: ensures days_to_nearest_holiday
     doesn't create NaN for every row when the data span contains no holidays."""
 
     def test_days_to_nearest_holiday_populated_when_no_holidays_in_range(self, tmp_path):
-        """Date range 2025-01-05 to 2025-01-12 contains no US Federal holidays,
-        but is within 40 days of both New Year's Day (Jan 1) and MLK Jr. Day (Jan 15-21).
-        With padding, days_to_nearest_holiday should be populated (not NaN) for all rows,
-        and train/test outputs should be non-empty (not silently dropped by dropna)."""
+        """Date range 2025-04-01 to 2025-04-08 falls squarely inside the ~105-day
+        US Federal holiday-free gap between Washington's Birthday (Feb) and Memorial
+        Day (late May) — more than 40 days from either, so the OLD 40-day padding
+        would have produced an empty holiday_arr, sent every days_to_nearest_holiday
+        to NaN, and let dropna() silently delete all 192 rows. The NEW 200-day
+        padding reaches both surrounding holidays, so days_to_nearest_holiday should
+        be populated (not NaN) for all rows, and train/test outputs should be
+        non-empty (not silently dropped by dropna)."""
         interim_dir = tmp_path / "interim"
         features_dir = tmp_path / "features"
         config_dir = tmp_path / "config"
-        run_id = "2025-01-05"
+        run_id = "2025-04-01"
 
-        # 8-day series, 2025-01-05 to 2025-01-12, no holidays in range
-        # but within 40 days of nearby holidays
-        df = _synthetic_series(8 * 24, start="2025-01-05")  # 8 days of hourly data
+        # 8-day series, 2025-04-01 to 2025-04-08, no holidays in range and
+        # >40 days from the nearest one in either direction
+        df = _synthetic_series(8 * 24, start="2025-04-01")  # 8 days of hourly data
         _write_interim_fixture(interim_dir, run_id, df)
         _write_forecast_config(
             config_dir,

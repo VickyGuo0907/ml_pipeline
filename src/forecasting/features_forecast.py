@@ -73,17 +73,20 @@ def engineer_forecast_features(
         feature_df["hour"] = feature_df.index.hour
         feature_df["day_of_week"] = feature_df.index.dayofweek
         feature_df["month"] = feature_df.index.month
-        feature_df["is_weekend"] = feature_df.index.dayofweek >= 5
+        feature_df["is_weekend"] = (feature_df.index.dayofweek >= 5).astype(int)
 
     if features_config.holiday_features:
         calendar = USFederalHolidayCalendar()
-        padding = pd.Timedelta(days=40)
+        # USFederalHolidayCalendar's largest holiday-free gap is ~105 days
+        # (Washington's Birthday in Feb to Memorial Day in late May); 200
+        # days of padding comfortably exceeds that worst case.
+        padding = pd.Timedelta(days=200)
         holidays = calendar.holidays(
             start=feature_df.index.min() - padding,
             end=feature_df.index.max() + padding,
         )
         normalized = feature_df.index.normalize()
-        feature_df["is_holiday"] = normalized.isin(holidays)
+        feature_df["is_holiday"] = normalized.isin(holidays).astype(int)
         holiday_arr = holidays.values
         feature_df["days_to_nearest_holiday"] = [
             int(np.abs(holiday_arr - ts).min() / np.timedelta64(1, "D")) if len(holiday_arr) else np.nan
@@ -93,6 +96,15 @@ def engineer_forecast_features(
     rows_before_dropna = len(feature_df)
     feature_df = feature_df.dropna()
     rows_dropped_warmup = rows_before_dropna - len(feature_df)
+
+    if feature_df.empty:
+        raise ValueError(
+            "All rows were dropped during warm-up/NaN cleanup — the feature "
+            "matrix is empty. This usually means the configured lag/rolling "
+            "windows are longer than the available data, or (with "
+            "holiday_features enabled) the holiday lookup window doesn't "
+            "reach any real holiday for this date range."
+        )
 
     split_idx = int(len(feature_df) * pipeline_config.train_test_split)
     train_df = feature_df.iloc[:split_idx].copy()
