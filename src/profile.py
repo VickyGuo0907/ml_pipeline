@@ -173,7 +173,7 @@ def generate_mstl_report(
 
     DAILY, WEEKLY, ANNUAL = 24, 168, 8766
     periods = [DAILY, WEEKLY]
-    if len(series) >= 2 * ANNUAL:
+    if len(series) > 2 * ANNUAL:
         periods.append(ANNUAL)
 
     result = MSTL(series, periods=periods).fit()
