@@ -60,6 +60,18 @@ class TestSelectCvOrigins:
         origins = select_cv_origins(idx, n_windows=5, horizon_hours=10, min_history_hours=5)
         assert origins[0] >= idx[5]
 
+    def test_returns_empty_list_when_series_too_short_for_any_window(self):
+        """A series shorter than horizon_hours + min_history_hours can't
+        support even one origin — select_cv_origins must return [] rather
+        than raise, so callers (train_forecast_models, evaluate_forecast's
+        registration step) can detect and report this cleanly instead of
+        crashing on a malformed index slice."""
+        index = pd.date_range("2020-01-01", periods=10, freq="h")
+
+        origins = select_cv_origins(index, n_windows=3, horizon_hours=20, min_history_hours=1)
+
+        assert origins == []
+
 
 class TestScoreStatsmodelsOrigins:
     def test_in_sample_dynamic_scores_each_valid_origin(self):
