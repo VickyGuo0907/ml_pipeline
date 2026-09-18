@@ -69,5 +69,19 @@ def fit_sarimax(y: pd.Series, hyperparameters: dict[str, Any], exog: pd.Series |
         seasonal_order=seasonal_order,
         enforce_stationarity=False,
         enforce_invertibility=False,
+        # A large seasonal period (e.g. 24) tracked in the state vector makes
+        # the Kalman filter's per-step state covariance matrices - and the
+        # memory the MLE optimizer's numerical Hessian needs across repeated
+        # full filter passes - grow sharply with series length: measured
+        # empirically at 5.7GB peak RSS / non-convergence for a 2-year hourly
+        # series with order=(2,1,2)/seasonal_order=(1,1,1,24), vs. 2.2GB and
+        # genuine convergence with simple_differencing=True, which instead
+        # differences the observed series directly rather than carrying that
+        # in the state. Costs only the first d+D*seasonal_periods
+        # observations (dropped, not NaN-filled) - never material here since
+        # rolling-origin CV origins already keep a much larger margin
+        # (min_history_hours, driven by the largest configured lag/rolling
+        # window) past the start of the fitted series.
+        simple_differencing=True,
     )
     return model.fit(disp=False)
