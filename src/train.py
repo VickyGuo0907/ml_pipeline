@@ -45,7 +45,7 @@ def _log_model(model: Any, model_type: str) -> Any:
         The MLflow ModelInfo for the logged model.
     """
     log_fn = _MLFLOW_LOG_MODEL_FNS.get(model_type, mlflow.sklearn.log_model)
-    return log_fn(model, artifact_path="model")
+    return log_fn(model, name="model")
 
 
 def _log_metrics(
