@@ -42,7 +42,7 @@ from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel, Field, RootModel
 
 from src.forecasting.serve_forecast import forecast_with_gbm, forecast_with_statsmodels, load_latest_snapshot
-from src.utils.config import load_forecast_features_config
+from src.utils.config import load_forecast_features_config, load_orchestration_config
 
 logger = logging.getLogger(__name__)
 
@@ -420,6 +420,13 @@ async def predict_forecast(
     """Forecast horizon_hours ahead using whichever forecasting model
     SERVING_MODEL_NAME points at. Returns 400 if the currently loaded model
     is not a forecasting model — use POST /predict for tabular models.
+
+    MAX_FORECAST_HORIZON_HOURS (168) is a request-size cap, not an accuracy
+    guarantee: each model's rolling-origin CV only validates accuracy out to
+    its own models.yaml evaluation.horizon_hours (24 for pjm_load_forecast's
+    models today). A request beyond that horizon still returns a forecast —
+    the model extrapolates further than its CV evidence covers, and error is
+    expected to grow with distance past that point.
     """
     if not _model_cache.get("is_forecasting"):
         raise HTTPException(
@@ -438,7 +445,15 @@ async def predict_forecast(
             series = forecast_with_statsmodels(_model_cache["model"], horizon_hours)
         elif forecast_model_type == "gbm":
             pipeline_type = _model_cache.get("pipeline_type")
-            snapshot = load_latest_snapshot(f"data/{pipeline_type}/features") if pipeline_type else None
+            snapshot = None
+            if pipeline_type:
+                try:
+                    features_dir = load_orchestration_config(f"config/{pipeline_type}").directories.features
+                    snapshot = load_latest_snapshot(features_dir)
+                except Exception as e:
+                    logger.warning(
+                        "Could not load orchestration config for pipeline '%s': %s", pipeline_type, e,
+                    )
             if snapshot is None:
                 raise HTTPException(
                     status_code=503,

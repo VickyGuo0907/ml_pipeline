@@ -1,7 +1,5 @@
 """Tests for live forecast serving: snapshot loading and per-model-family
 multi-step forecasting (statsmodels native forecast, GBM recursive)."""
-from pathlib import Path
-
 import mlflow
 import mlflow.statsmodels
 import numpy as np

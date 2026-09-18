@@ -1,4 +1,6 @@
 """Data profiling stage using ydata-profiling."""
+import base64
+import io
 import logging
 from pathlib import Path
 from typing import Any
@@ -202,8 +204,6 @@ def generate_mstl_report(
     fig.suptitle(f"MSTL Decomposition — {filename} ({run_id})")
     fig.tight_layout()
 
-    import io
-    import base64
     buf = io.BytesIO()
     fig.savefig(buf, format="png")
     plt.close(fig)

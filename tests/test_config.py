@@ -448,3 +448,20 @@ def test_forecast_configs_reexported_from_utils_package():
     assert callable(load_forecast_cleaning_config)
     assert callable(load_forecast_features_config)
     assert callable(load_forecast_models_config)
+
+
+def test_forecast_features_config_rejects_snapshot_hours_below_max_lag_or_window():
+    """snapshot_hours must cover the longest lag/rolling window, or
+    engineer_forecast_features' snapshot slice would be too short to fully
+    populate the longest lag/rolling feature at serving time, silently
+    seeding live forecasts with NaN instead of failing loud at config load."""
+    with pytest.raises(ValueError, match="snapshot_hours"):
+        ForecastFeaturesConfig(lags=[1, 24, 168], rolling_windows=[24], snapshot_hours=100)
+
+
+def test_forecast_features_config_accepts_snapshot_hours_at_the_boundary():
+    """snapshot_hours exactly equal to the longest lag/window is valid — the
+    guard is >=, not >, matching how the real config/pjm_load_forecast
+    features.yaml is configured today (snapshot_hours: 168 == max lag)."""
+    config = ForecastFeaturesConfig(lags=[1, 24, 168], rolling_windows=[24], snapshot_hours=168)
+    assert config.snapshot_hours == 168

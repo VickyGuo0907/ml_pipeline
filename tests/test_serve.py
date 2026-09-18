@@ -312,7 +312,12 @@ class TestPredictForecastEndpoint:
         run_dir = tmp_path / "data" / "test_forecast" / "features" / "2026-09-17"
         run_dir.mkdir(parents=True)
         snapshot.to_parquet(run_dir / "last_window.parquet")
-        monkeypatch.chdir(tmp_path)  # load_latest_snapshot resolves data/<pipeline_type>/features relative to cwd
+        config_dir = tmp_path / "config" / "test_forecast"
+        config_dir.mkdir(parents=True)
+        (config_dir / "orchestration.yaml").write_text(
+            "directories:\n  features: data/test_forecast/features\n"
+        )
+        monkeypatch.chdir(tmp_path)  # predict_forecast resolves config/<pipeline_type>/orchestration.yaml relative to cwd
 
         class _IdentityLag1Model:
             def predict(self, X):

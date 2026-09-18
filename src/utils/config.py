@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Any, Literal, Optional
 
 import yaml
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class ProblemType(str, Enum):
@@ -423,6 +423,22 @@ class ForecastFeaturesConfig(BaseModel):
         default=168, ge=1,
         description="How many trailing hours of the series to snapshot per run for serving-time lag seeding",
     )
+
+    @model_validator(mode="after")
+    def validate_snapshot_covers_longest_lag_or_window(self) -> "ForecastFeaturesConfig":
+        """snapshot_hours must be >= the longest configured lag/rolling
+        window, or serve_forecast.py's forecast_with_gbm would be seeded
+        from a snapshot too short to fully populate that feature — silently
+        producing NaN-seeded live forecasts instead of failing at config
+        load time, where the mistake is cheap to catch and fix."""
+        required = max(self.lags + self.rolling_windows, default=0)
+        if self.snapshot_hours < required:
+            raise ValueError(
+                f"snapshot_hours ({self.snapshot_hours}) must be >= the longest configured "
+                f"lag/rolling window ({required}), or live forecasts would be seeded from a "
+                f"snapshot too short to fully populate that feature."
+            )
+        return self
 
 
 class ForecastEvaluationConfig(BaseModel):
