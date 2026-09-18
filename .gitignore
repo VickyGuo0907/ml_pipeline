@@ -30,6 +30,7 @@ data/source_data/**
 # ML artifacts
 mlflow-artifacts/
 mlruns/
+notebooks/*.db
 
 # OS
 .DS_Store
