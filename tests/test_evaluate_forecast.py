@@ -245,3 +245,48 @@ class TestRegisterSarimaxWithHolidayExog:
         with open(report_path) as f:
             report = yaml.safe_load(f)
         assert report["models"]["test_sarimax"]["status"] == "registered"
+
+    def test_sarimax_converged_tag_copied_to_registered_model_version(self, tmp_path):
+        """A sarimax_converged tag set on the training run must also land on
+        the registered model version, so an operator checking the MLflow
+        registry UI for a SARIMAX model doesn't have to separately look up
+        its source run to see whether the fit actually converged."""
+        features_dir = tmp_path / "features"
+        config_dir = tmp_path / "config"
+        reports_dir = tmp_path / "reports"
+        run_id = "2026-09-17"
+
+        _write_feature_parquets_with_holiday(features_dir, run_id)
+        _write_forecast_config_sarimax(config_dir)
+
+        mlflow_uri = f"sqlite:///{tmp_path / 'mlflow.db'}"
+        train_df = pd.read_parquet(features_dir / run_id / "train.parquet")
+        mlflow.set_tracking_uri(mlflow_uri)
+        mlflow.set_experiment("test_evaluate_forecast_sarimax_converged_tag")
+        with mlflow.start_run(run_name="test_run_test_sarimax") as run:
+            mlflow.set_tags({
+                "model_name": "test_sarimax", "model_type": "sarimax",
+                "run_id": run_id, "pipeline_type": "test_forecast",
+                "sarimax_converged": "True",
+            })
+            fitted = fit_sarimax(
+                train_df["PJME_MW"],
+                {"order": [1, 0, 0], "seasonal_order": [0, 0, 0, 0], "use_holiday_exog": True},
+                exog=train_df["is_holiday"],
+            )
+            mlflow.log_metric("cv_mape_mean", 5.0)
+            mlflow.statsmodels.log_model(fitted, name="model")
+            mlflow_run_id = run.info.run_id
+
+        register_forecast_models_to_mlflow(
+            mlflow_tracking_uri=mlflow_uri,
+            mlflow_run_ids={"test_sarimax": mlflow_run_id},
+            config_dir=config_dir,
+            run_id=run_id,
+            reports_dir=reports_dir,
+            features_dir=features_dir,
+        )
+
+        client = mlflow.tracking.MlflowClient(tracking_uri=mlflow_uri)
+        version = client.get_latest_versions("test_sarimax", stages=["Staging"])[0]
+        assert version.tags.get("sarimax_converged") == "True"

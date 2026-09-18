@@ -186,6 +186,8 @@ def register_forecast_models_to_mlflow(
             }
             if cv_mape_mean is not None:
                 version_tags["cv_mape_mean"] = f"{cv_mape_mean:.4f}"
+            if "sarimax_converged" in run_tags:
+                version_tags["sarimax_converged"] = run_tags["sarimax_converged"]
             for key, value in version_tags.items():
                 client.set_model_version_tag(model_name, version, key, value)
 
