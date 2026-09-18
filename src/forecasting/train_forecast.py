@@ -94,8 +94,28 @@ def train_forecast_models(
                     window_scores = score_statsmodels_origins(fitted, y_train, origins, eval_cfg.horizon_hours)
                     mlflow.statsmodels.log_model(fitted, name="model")
                 elif model_cfg.type == "sarimax":
-                    exog = train_df["is_holiday"] if "is_holiday" in train_df.columns else None
-                    fitted = fit_sarimax(y_train, model_cfg.hyperparameters, exog=exog)
+                    # SARIMAX's Kalman filter state-space cost grows with series
+                    # length; a seasonal_order period (e.g. 24) fit over a
+                    # multi-year hourly history (100k+ rows) is memory-prohibitive
+                    # on a typical local/Docker deployment. Daily/weekly
+                    # seasonality doesn't need more than a couple of years of
+                    # history to estimate well, so max_train_hours (optional,
+                    # models.yaml hyperparameter) caps how much trailing history
+                    # SARIMAX fits on — ETS and GBM above/below are unaffected
+                    # and still train on the full series.
+                    max_train_hours = model_cfg.hyperparameters.get("max_train_hours")
+                    sarimax_df = train_df.tail(max_train_hours) if max_train_hours else train_df
+                    sarimax_y = sarimax_df[target_col]
+                    exog = sarimax_df["is_holiday"] if "is_holiday" in sarimax_df.columns else None
+                    if max_train_hours:
+                        sarimax_origins = select_cv_origins(
+                            sarimax_y.index, eval_cfg.n_windows, eval_cfg.horizon_hours,
+                            min_history_hours=min_history_hours,
+                        )
+                        mlflow.log_param("sarimax_train_hours", len(sarimax_y))
+                    else:
+                        sarimax_origins = origins
+                    fitted = fit_sarimax(sarimax_y, model_cfg.hyperparameters, exog=exog)
                     if not fitted.mle_retvals.get("converged", True):
                         logger.warning(
                             "SARIMAX fit for %s did not converge (order/seasonal_order are "
@@ -103,7 +123,7 @@ def train_forecast_models(
                             "proceeding with the unconverged fit's parameters.", model_cfg.name,
                         )
                     mlflow.set_tag("sarimax_converged", fitted.mle_retvals.get("converged", True))
-                    window_scores = score_statsmodels_origins(fitted, y_train, origins, eval_cfg.horizon_hours)
+                    window_scores = score_statsmodels_origins(fitted, sarimax_y, sarimax_origins, eval_cfg.horizon_hours)
                     mlflow.statsmodels.log_model(fitted, name="model")
                 elif model_cfg.type == "gbm":
                     model = get_model("gbm", model_cfg.hyperparameters)

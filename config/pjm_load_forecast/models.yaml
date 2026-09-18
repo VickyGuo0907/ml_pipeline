@@ -18,6 +18,14 @@ models:
       order: [2, 1, 2]
       seasonal_order: [1, 1, 1, 24]
       use_holiday_exog: true
+      # SARIMAX's Kalman filter cost grows with series length; fitting the
+      # full ~16-year (~127k row) training set exhausted this local Docker
+      # deployment's memory (7.75GB shared across all 8 services) and was
+      # OOM-killed. Daily/weekly seasonality (seasonal_order period 24) is
+      # well estimated from far less history, so SARIMAX trains on only its
+      # trailing max_train_hours here — ETS and GBM above/below still train
+      # on the full series. 17520 = 2 years.
+      max_train_hours: 17520
 
   - name: "pjm_load_forecast_gbm"
     type: "gbm"

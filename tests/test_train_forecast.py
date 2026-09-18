@@ -136,3 +136,50 @@ class TestTrainForecastModels:
 
         with pytest.raises(FileNotFoundError):
             train_forecast_models(features_dir, "2026-09-16", config_dir)
+
+    def test_sarimax_max_train_hours_truncates_only_sarimax(self, tmp_path):
+        """SARIMAX's own Kalman filter state-space cost is prohibitive on a
+        long series (real config/pjm_load_forecast/models.yaml's full ~127k-row
+        history OOM-killed this project's local Docker deployment). Setting
+        max_train_hours in SARIMAX's hyperparameters must cap only its own
+        training window (logged as sarimax_train_hours) while ETS keeps
+        training on the full series — proven here by checking ETS's own
+        window scores are still computed from the full 400-hour history."""
+        features_dir = tmp_path / "features"
+        run_dir = features_dir / "2026-09-16"
+        run_dir.mkdir(parents=True)
+
+        train_df = _synthetic_train_df(n_hours=400)
+        train_df.to_parquet(run_dir / "train.parquet")
+        train_df.tail(20).to_parquet(run_dir / "test.parquet")
+
+        config_dir = tmp_path / "config"
+        _write_forecast_config(
+            config_dir,
+            models=[
+                {"name": "test_ets", "type": "ets", "hyperparameters": "{seasonal_periods: 24, trend: add, seasonal: add}"},
+                {
+                    "name": "test_sarimax", "type": "sarimax",
+                    "hyperparameters": "{order: [1, 0, 0], seasonal_order: [1, 0, 0, 24], max_train_hours: 100}",
+                },
+            ],
+            horizon_hours=4, n_windows=2,
+            lags=[1], rolling_windows=[],
+        )
+
+        mlflow_uri = f"sqlite:///{tmp_path / 'mlflow.db'}"
+        mlflow.set_tracking_uri(mlflow_uri)
+        mlflow.set_experiment("test_train_forecast_sarimax_max_train_hours")
+
+        result = train_forecast_models(features_dir, "2026-09-16", config_dir, mlflow_tracking_uri=mlflow_uri)
+
+        assert set(result["models"]) == {"test_ets", "test_sarimax"}
+        assert result["models"]["test_sarimax"]["n_windows_scored"] >= 1
+
+        client = mlflow.tracking.MlflowClient(tracking_uri=mlflow_uri)
+        sarimax_run = client.get_run(result["models"]["test_sarimax"]["mlflow_run_id"])
+        assert sarimax_run.data.params["sarimax_train_hours"] == "100"
+
+        ets_run = client.get_run(result["models"]["test_ets"]["mlflow_run_id"])
+        assert "sarimax_train_hours" not in ets_run.data.params
+        assert ets_run.data.params["n_windows"] != "0"

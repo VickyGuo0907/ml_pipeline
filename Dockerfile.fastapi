@@ -9,10 +9,14 @@ FROM python:3.11-slim
 
 USER root
 
-# libgomp1: LightGBM's OpenMP runtime. curl: healthcheck.
+# libgomp1: LightGBM's OpenMP runtime. curl: healthcheck. build-essential:
+# phik (a transitive ydata-profiling dependency pulled in by the shared
+# pyproject.toml, same as Dockerfile.airflow) has no prebuilt wheel for
+# linux/arm64 and compiles a C++ extension via CMake at install time.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libgomp1 \
     curl \
+    build-essential \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 COPY pyproject.toml uv.lock ./
