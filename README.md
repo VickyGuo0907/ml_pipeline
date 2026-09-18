@@ -8,6 +8,11 @@ code changes. The goal is a reusable pipeline, not a one-off script: add a new d
 dropping a `config/<pipeline>/` directory, and `dag_factory.py` auto-discovers it and registers
 a new Airflow DAG with no Python changes required.
 
+A fourth pipeline, `pjm_load_forecast`, extends the same config-driven, auto-discovered DAG
+pattern to time-series forecasting (`problem_type: forecasting`) — see
+[Forecasting Pipelines](#forecasting-pipelines) below for how it differs from the tabular
+regression pipelines above.
+
 Three demo pipelines exercise this in the repo today:
 
 - **`biomedical_clinical`** — CMS Hospital Compare hospital readmission data (the primary
@@ -161,7 +166,36 @@ All config in `config/` directory, validated via Pydantic models:
 - `config/<pipeline>/models.yaml` — Model hyperparameters (linear family, LightGBM); `evaluation` registration thresholds plus `champion_metric` (`test_rmse` or `cv_r2`) and `cv_tie_tolerance`; `cross_validation` (`folds`, optional `group_column`); `diagnostics` (residual assumption tests, `linear_types` only); `feature_importance` (`top_n` ranked coefficients or split gains). The last three default to `enabled: false`, so a pipeline that does not opt in behaves exactly as before they existed.
 
 Active pipelines: `biomedical_clinical` (@weekly), `bioinfo_gene` (@monthly),
-`hospital_readmission_lagged` (@monthly).
+`hospital_readmission_lagged` (@monthly), `pjm_load_forecast` (@weekly).
+
+### Forecasting Pipelines
+
+`pjm_load_forecast` is a `problem_type: forecasting` pipeline — a different problem shape from
+the three tabular regression pipelines above (one univariate hourly series, not a row-per-entity
+feature matrix), handled by a parallel set of stage functions and config classes rather than a
+new template layer:
+
+- **Dispatch, not duplication:** `src/dags/dag_factory.py` reads each pipeline's `problem_type`
+  and swaps in `src/forecasting/{clean_forecast,features_forecast,train_forecast,evaluate_forecast}.py`
+  in place of the tabular `clean.py`/`features.py`/`train.py`/`evaluate.py` for `clean`,
+  `feature_engineer`, `train`, and `register` — the DAG shape (9 stages, same task IDs) and every
+  other tabular pipeline are unaffected; `profile_raw_files` additionally runs an MSTL seasonal
+  decomposition report (`src/profile.py:generate_mstl_report`) for forecasting pipelines only.
+- **Config classes:** `ForecastCleaningConfig`/`ForecastFeaturesConfig`/`ForecastModelsConfig`/
+  `ForecastEvaluationConfig` (in `src/utils/config.py`, re-exported from `src.utils`) replace the
+  tabular `CleaningConfig`/`FeaturesConfig`/`ModelsConfig`/`EvaluationConfig` for this pipeline's
+  `cleaning.yaml`/`features.yaml`/`models.yaml` — same file names, different schema.
+- **Models:** ETS and SARIMAX (`statsmodels`, fit once, scored via rolling-origin cross-validation)
+  plus a LightGBM model trained on engineered lag/rolling/calendar/holiday features and scored via
+  recursive multi-step forecasting — all three compared on MAPE, and the run champion is whichever
+  has the lowest cross-validated MAPE.
+- **`unsupervised_explore` and `drift_report` are disabled** for this pipeline
+  (`config/pjm_load_forecast/orchestration.yaml`): PCA/k-means don't apply to a single univariate
+  series, and forecasting drift comparison isn't implemented.
+
+See the [`pjm_load_forecast`](#pjm_load_forecast--pjm-hourly-load-forecasting-forecasting-demo)
+entry under [Demo Pipelines](#demo-pipelines) for dataset setup and how to call the live
+forecasting endpoint.
 
 #### Model validation options
 
@@ -267,7 +301,8 @@ The DIAGNOSTICS.md guide covers:
 - **Orchestration:** Apache Airflow 3 (LocalExecutor)
 - **Data Validation:** Pandera (schemas at boundaries)
 - **Profiling:** ydata-profiling (per-source HTML reports)
-- **Modeling:** scikit-learn (linear) + LightGBM (gradient boosting)
+- **Modeling:** scikit-learn (linear) + LightGBM (gradient boosting); `pjm_load_forecast` adds
+  `statsmodels` (ETS, SARIMAX) for time-series forecasting
 - **ML Tracking:** MLflow (Postgres backend, local artifacts)
 - **Drift Monitoring:** Evidently AI
 - **Serving:** FastAPI (model inference)
@@ -322,6 +357,54 @@ lower but honest number. The general lesson: any field derived from the *same un
 event* as the target, even under a different name or computed by a different party (here, CMS's
 own star-rating methodology), deserves the same suspicion as an obviously duplicated column.
 
+### `pjm_load_forecast` — PJM hourly load forecasting (forecasting demo)
+
+A genuinely different problem shape from the three pipelines above — one univariate hourly time
+series, not a row-per-entity feature matrix. See [Forecasting Pipelines](#forecasting-pipelines)
+for how the DAG dispatches to a parallel set of stage functions for this `problem_type`.
+
+- **Source:** [`robikscube/hourly-energy-consumption`](https://www.kaggle.com/datasets/robikscube/hourly-energy-consumption)
+  on Kaggle (`PJME_hourly.csv`) — hourly electricity load (MW) for the PJM Interconnection's PJME
+  zone, 2002-2018. Not committed to the repo (download it yourself and place it in the landing
+  zone below).
+- **Target:** `PJME_MW` (continuous, always positive).
+- **Models:** ETS and SARIMAX (`statsmodels`) plus a LightGBM model on lag/rolling/calendar/holiday
+  features (`config/pjm_load_forecast/models.yaml`) — see
+  [Forecasting Pipelines](#forecasting-pipelines) above.
+
+**Setup and running the pipeline end-to-end:**
+
+1. Download `PJME_hourly.csv` from the Kaggle link above and place it at
+   `data/pjm_load_forecast/landing/PJME_hourly.csv`.
+2. Trigger `pjm_load_forecast_pipeline` in the Airflow UI (http://localhost:8080), same as any
+   other pipeline — see [Running the DAG](#running-the-dag).
+3. Check training results in MLflow (http://localhost:5001): each run logs three models
+   (`pjm_load_forecast_ets`, `pjm_load_forecast_sarimax`, `pjm_load_forecast_gbm`), each with
+   `cv_mape_mean`/`cv_mape_std` (training-set rolling-origin CV) and, after the register stage,
+   `test_mape_mean` (held-out test-set scoring) as a model-version tag. The run champion (lowest
+   `cv_mape`) is tagged `run_champion: true` on its registered version, mirroring the tabular
+   pipelines' champion/challenger tagging.
+4. Promote a model version to Production in the MLflow UI (manual click, same as every other
+   pipeline — no auto-promotion).
+5. Set `SERVING_MODEL_NAME` to the promoted model's full name (e.g. `pjm_load_forecast_gbm`) and
+   restart the `fastapi` container, then call the live forecasting endpoint:
+   ```bash
+   curl "http://localhost:8000/predict/forecast?horizon_hours=24"
+   ```
+   Returns a JSON list of `horizon_hours` timestamped predictions. `horizon_hours` can go up to
+   168 (one week), but each model's cross-validated accuracy evidence only covers
+   `config/pjm_load_forecast/models.yaml`'s `evaluation.horizon_hours` (24 by default) — a request
+   beyond that horizon still returns a forecast, just one increasingly extrapolated past the
+   horizon the model was actually validated on.
+
+**Known limitation — MSTL report runtime at full dataset scale:** the `profile` task's MSTL
+seasonal decomposition report (`generate_mstl_report`, daily + weekly +, for a long enough
+series, annual periods) takes roughly 8 minutes against the full `PJME_hourly.csv` (~145,000
+rows spanning 2002-2018), since statsmodels' STL decomposition scales with both series length and
+number of periods. No `execution_timeout` is set on this task. This is acceptable for this POC's
+`@weekly` schedule but would need either a timeout or a periods-limited fast path before this
+pattern is reused on a much larger or more frequently-scheduled series.
+
 ## Key Design Decisions
 
 1. **One DAG, task groups:** Single orchestration DAG with 9 task groups for clarity
@@ -338,6 +421,7 @@ own star-rating methodology), deserves the same suspicion as an obviously duplic
 12. **Read-only MLflow artifacts:** FastAPI mounts artifacts as read-only
 13. **On-demand drift:** Drift monitoring runs inside training DAG as final optional task
 14. **Reports server:** nginx container at `:8888` serves `reports/` with directory listing; URL per pipeline set in `orchestration.yaml` (`reports_base_url`); Airflow task "Docs" tab links directly to it
+15. **Forecasting via dispatch, not a second template:** `dag_factory.py` reads `problem_type` and swaps in forecasting-specific stage functions/config classes for `clean`/`feature_engineer`/`train`/`register` (see [Forecasting Pipelines](#forecasting-pipelines)) — the DAG shape and every tabular pipeline are unaffected, and adding a forecasting pipeline still requires no Python changes, same as the tabular case
 
 ## Troubleshooting
 
