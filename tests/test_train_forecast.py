@@ -1,5 +1,6 @@
 """Tests for the forecasting training stage: rolling-origin CV scoring and
 MLflow logging for ETS, SARIMAX, and GBM."""
+import json
 from pathlib import Path
 
 import numpy as np
@@ -97,6 +98,19 @@ class TestTrainForecastModels:
             assert "mlflow_run_id" in info
             assert info["cv_mape_mean"] >= 0
             assert info["n_windows_scored"] >= 1
+
+        client = mlflow.tracking.MlflowClient(tracking_uri=mlflow_uri)
+        gbm_run_id = result["models"]["test_gbm"]["mlflow_run_id"]
+        local_path = client.download_artifacts(gbm_run_id, "feature_importance.json")
+        with open(local_path) as f:
+            importance = json.load(f)
+        assert importance["source"] == "feature_importances_"
+        assert {item["feature"] for item in importance["ranking"]} == {"lag_1h", "hour", "day_of_week", "month", "is_weekend"}
+
+        # ETS/SARIMAX have no feature_importances_/coef_ equivalent - no artifact expected.
+        ets_run_id = result["models"]["test_ets"]["mlflow_run_id"]
+        ets_artifacts = {a.path for a in client.list_artifacts(ets_run_id)}
+        assert "feature_importance.json" not in ets_artifacts
 
     def test_one_bad_model_does_not_block_the_others(self, tmp_path):
         """A model type that fails to fit (here: an unknown type) is logged

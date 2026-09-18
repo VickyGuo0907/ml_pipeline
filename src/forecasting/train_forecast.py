@@ -23,6 +23,7 @@ import pandas as pd
 from src.forecasting.model_registry import fit_ets, fit_sarimax
 from src.forecasting.rolling_origin import score_gbm_origins, score_statsmodels_origins, select_cv_origins
 from src.utils.config import load_forecast_features_config, load_forecast_models_config, load_pipeline_config
+from src.utils.diagnostics import feature_importance
 from src.utils.io import resolve_run_path
 from src.utils.model_registry import get_model
 
@@ -139,6 +140,13 @@ def train_forecast_models(
                     # src/train.py's _MLFLOW_LOG_MODEL_FNS) — use the lightgbm
                     # flavor instead, which serializes natively.
                     mlflow.lightgbm.log_model(model, name="model")
+                    # Free after fit() - no separate config toggle needed the way
+                    # the tabular pipeline's optional feature_importance block has
+                    # one, since GBM is the only forecasting model type where this
+                    # attribute exists at all (ETS/SARIMAX have no equivalent).
+                    importance = feature_importance(model, feature_columns)
+                    if importance:
+                        mlflow.log_dict(importance, "feature_importance.json")
                 else:
                     raise ValueError(
                         f"Unknown forecasting model type '{model_cfg.type}'. "
