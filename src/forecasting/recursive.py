@@ -43,7 +43,7 @@ def _build_feature_row(
         ts: Timestamp to build the feature row for.
         lags: Lag hours (matches ForecastFeaturesConfig.lags).
         rolling_windows: Rolling window hours (matches .rolling_windows).
-        calendar_features: Whether to add hour/day_of_week/month/is_weekend.
+        calendar_features: Whether to add hour/day_of_week/month/is_weekend/year.
         holiday_features: Whether to add is_holiday/days_to_nearest_holiday.
         holidays: Precomputed holiday DatetimeIndex spanning well beyond
             buffer's and the forecast horizon's range (padded, like
@@ -74,6 +74,7 @@ def _build_feature_row(
         row["day_of_week"] = ts.dayofweek
         row["month"] = ts.month
         row["is_weekend"] = int(ts.dayofweek >= 5)
+        row["year"] = ts.year
     if holiday_features:
         normalized_ts = ts.normalize()
         is_holiday = holidays is not None and normalized_ts in holidays

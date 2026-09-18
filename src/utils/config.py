@@ -414,7 +414,7 @@ class ForecastFeaturesConfig(BaseModel):
         description="Rolling mean/std window sizes in hours",
     )
     calendar_features: bool = Field(
-        default=True, description="Add hour/day_of_week/month/is_weekend columns",
+        default=True, description="Add hour/day_of_week/month/is_weekend/year columns",
     )
     holiday_features: bool = Field(
         default=True, description="Add is_holiday/days_to_nearest_holiday columns (US federal holidays)",

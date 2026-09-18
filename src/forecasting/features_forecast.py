@@ -74,6 +74,12 @@ def engineer_forecast_features(
         feature_df["day_of_week"] = feature_df.index.dayofweek
         feature_df["month"] = feature_df.index.month
         feature_df["is_weekend"] = (feature_df.index.dayofweek >= 5).astype(int)
+        # Raw calendar year, fed to GBM directly (no scaling needed for a
+        # tree model) as an explicit long-term trend signal — lags alone
+        # only encode recent history, not multi-year drift. Matches the
+        # dataset's own well-known reference approach (robikscube's XGBoost
+        # tutorial for this exact dataset includes `year` in its feature set).
+        feature_df["year"] = feature_df.index.year
 
     if features_config.holiday_features:
         calendar = USFederalHolidayCalendar()

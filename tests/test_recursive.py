@@ -52,6 +52,7 @@ class TestBuildFeatureRow:
         assert row["day_of_week"] == 5  # Saturday
         assert row["month"] == 1
         assert row["is_weekend"] == 1
+        assert row["year"] == 2020
 
     def test_holiday_features_use_precomputed_holidays(self):
         idx = pd.date_range("2019-07-01", periods=5, freq="h")
@@ -149,5 +150,24 @@ class TestRecursiveForecast:
 
         recursive_forecast(
             _ColumnOrderCheckingModel(), history, horizon=1, feature_columns=["lag_1h", "hour"],
+            lags=[1], rolling_windows=[], calendar_features=True, holiday_features=False,
+        )
+
+    def test_year_is_included_in_calendar_features_and_reaches_the_model(self):
+        """A model trained with `year` in its feature_columns (as
+        engineer_forecast_features now always produces when calendar_features
+        is on) must actually receive it at every recursive step — proving the
+        new column isn't silently dropped."""
+        idx = pd.date_range("2020-12-31 20:00:00", periods=10, freq="h")  # crosses into 2021
+        history = pd.Series(range(10), index=idx, dtype=float)
+
+        class _YearCheckingModel:
+            def predict(self, X: pd.DataFrame) -> np.ndarray:
+                assert "year" in X.columns
+                assert X["year"].iloc[0] == 2021  # first forecast step lands after the year boundary
+                return np.array([0.0])
+
+        recursive_forecast(
+            _YearCheckingModel(), history, horizon=1, feature_columns=["lag_1h", "hour", "year"],
             lags=[1], rolling_windows=[], calendar_features=True, holiday_features=False,
         )

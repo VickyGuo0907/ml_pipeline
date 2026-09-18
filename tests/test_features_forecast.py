@@ -131,6 +131,7 @@ class TestCalendarFeatures:
         assert row["day_of_week"] == 5  # Saturday
         assert row["month"] == 1
         assert bool(row["is_weekend"]) is True
+        assert row["year"] == 2020
 
 
 class TestHolidayFeatures:
