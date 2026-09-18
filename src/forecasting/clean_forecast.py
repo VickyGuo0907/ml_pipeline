@@ -45,6 +45,12 @@ def clean_forecast_data(
 ) -> dict[str, Any]:
     """Parse, sort, dedupe, and gap-handle the raw hourly series.
 
+    Duplicate timestamps are averaged, not arbitrarily resolved by keeping
+    the first-seen row: PJM's source data records the DST fall-back hour
+    under one repeated wall-clock label with two genuinely different
+    readings (no UTC offset in the raw file to disambiguate them), so
+    averaging preserves both readings' information rather than discarding one.
+
     Reindexes to a complete hourly DatetimeIndex spanning the series' min to
     max timestamp. Gaps at or under cleaning.yaml's max_gap_hours are filled
     (interpolate or ffill, per fill_strategy); longer gaps fail loud rather
@@ -90,7 +96,13 @@ def clean_forecast_data(
 
     df = df.sort_values("Datetime")
     before_dedup = len(df)
-    df = df.drop_duplicates(subset="Datetime", keep="first")
+    # A duplicate timestamp in PJM's raw data is a DST fall-back artifact, not
+    # a data-entry accident: the two rows are the genuine two real hours that
+    # share the same naive wall-clock label (no UTC offset in the source),
+    # each with its own distinct PJME_MW reading - e.g. 2014-11-02 02:00:00
+    # appears twice with 23755.0 and 22935.0 MW. Averaging keeps both
+    # readings' information rather than arbitrarily discarding one.
+    df = df.groupby("Datetime", as_index=False)[target_col].mean()
     duplicates_dropped = before_dedup - len(df)
 
     df = df.set_index("Datetime")

@@ -94,6 +94,33 @@ class TestCleanForecastData:
         assert cleaned.loc["2020-01-01 03:00:00", "PJME_MW"] == pytest.approx(40.0)
         assert cleaned.loc["2020-01-01 04:00:00", "PJME_MW"] == pytest.approx(50.0)
 
+    def test_duplicate_timestamp_with_different_values_is_averaged(self, tmp_path):
+        """A duplicate timestamp with two DIFFERENT readings (the real shape
+        of PJM's DST fall-back duplicates, e.g. 2014-11-02 02:00:00 appearing
+        twice as 23755.0 and 22935.0 MW) is averaged, not resolved by
+        arbitrarily keeping whichever row sorts first - both real readings'
+        information is kept rather than one being silently discarded."""
+        raw_dir = tmp_path / "raw"
+        interim_dir = tmp_path / "interim"
+        config_dir = tmp_path / "config"
+        run_id = "2026-09-16"
+
+        df = pd.DataFrame({
+            "Datetime": [
+                "2020-01-01 00:00:00", "2020-01-01 01:00:00", "2020-01-01 01:00:00",
+                "2020-01-01 02:00:00",
+            ],
+            "PJME_MW": [10.0, 23755.0, 22935.0, 30.0],
+        })
+        _write_raw_fixture(raw_dir, run_id, df)
+        _write_forecast_config(config_dir, max_gap_hours=3, fill_strategy="interpolate")
+
+        result = clean_forecast_data(raw_dir, interim_dir, run_id, config_dir=config_dir)
+
+        assert result["duplicates_dropped"] == 1
+        cleaned = pd.read_parquet(result["output_path"])
+        assert cleaned.loc["2020-01-01 01:00:00", "PJME_MW"] == pytest.approx((23755.0 + 22935.0) / 2)
+
     def test_long_gap_raises(self, tmp_path):
         """A gap longer than max_gap_hours fails loud instead of being silently filled."""
         raw_dir = tmp_path / "raw"
