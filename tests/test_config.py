@@ -465,3 +465,8 @@ def test_forecast_features_config_accepts_snapshot_hours_at_the_boundary():
     features.yaml is configured today (snapshot_hours: 168 == max lag)."""
     config = ForecastFeaturesConfig(lags=[1, 24, 168], rolling_windows=[24], snapshot_hours=168)
     assert config.snapshot_hours == 168
+
+
+def test_problem_type_has_finance_value():
+    """ProblemType gains a FINANCE member for the new m6_returns_risk pipeline."""
+    assert ProblemType.FINANCE.value == "finance"

@@ -13,6 +13,7 @@ class ProblemType(str, Enum):
     REGRESSION = "regression"
     CLASSIFICATION = "classification"
     FORECASTING = "forecasting"
+    FINANCE = "finance"
 
 
 class TargetConfig(BaseModel):
