@@ -194,9 +194,27 @@ def register_finance_models_to_mlflow(
 
     report["ic_leaderboard"] = ic_by_type
     report["error_std_leaderboard"] = avg_error_std_by_type
+    report["error_std_note"] = (
+        "error_std_leaderboard measures forecast-error dispersion (Plan 3's "
+        "risk-analysis figure), not model quality - it is shift-invariant, so "
+        "models that predict a constant (e.g. random_walk and mean with "
+        "window=null) can produce numerically identical values despite being "
+        "different models. Use ic_leaderboard, not this field, to compare "
+        "model quality."
+    )
     report["stationarity_note"] = (
         "ADF stationarity analysis is generated separately by the pipeline's "
         "profile stage (src/profile.py's generate_adf_report), not duplicated here."
+    )
+    report["scoring_methodology_note"] = (
+        "random_walk/mean/arima are scored with a STATIC multi-step forecast "
+        "(fitted once, forecasting the entire test horizon from the train "
+        "boundary); cross_sectional_gbm is scored with FRESH realized features "
+        "at every test month (an effectively 1-step-ahead information set). "
+        "The two are not a strictly apples-to-apples comparison - the IC "
+        "leaderboard should be read with this in mind, not as a fully fair "
+        "head-to-head. Walk-forward re-scoring of the per-asset models is a "
+        "candidate follow-up, not implemented here."
     )
 
     registered = [k for k, v in report["models"].items() if v["status"] == "registered"]
