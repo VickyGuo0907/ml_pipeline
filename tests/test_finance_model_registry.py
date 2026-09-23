@@ -44,7 +44,7 @@ class TestFitMean:
     def test_full_history_fittedvalues_are_constant_mean(self):
         y = pd.Series([0.01, 0.02, 0.03, 0.04])
         fitted = fit_mean(y, {"window": None})
-        assert (fitted.fittedvalues == pytest.approx(0.025)).all()
+        assert fitted.fittedvalues.tolist() == pytest.approx([0.025] * len(fitted.fittedvalues))
 
     def test_default_window_is_none_when_key_missing(self):
         y = pd.Series([0.01, 0.02, 0.03])
