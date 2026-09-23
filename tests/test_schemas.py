@@ -93,7 +93,7 @@ class TestFinanceFeaturesSchema:
         schema = build_finance_features_schema("log_return")
         df = pd.DataFrame({
             "log_return": [0.01, -0.02, 0.03],
-            "Ticker": ["AAPL", "MSFT", "AAPL"],
+            "Ticker": [0, 1, 0],
             "lag_1_return": [0.02, -0.01, 0.01],
         })
         validated = schema.validate(df)

@@ -68,8 +68,12 @@ def build_finance_features_schema(target_col: str) -> DataFrameSchema:
 
     Returns:
         DataFrameSchema that checks the target is a nullable float; strict=False
-        allows any additional predictor columns (Ticker, lag/volatility
-        features) without listing them explicitly.
+        allows any additional predictor columns without listing them explicitly.
+        Note: all columns, including any additional columns like Ticker and Date,
+        must already be numeric (label-encoded integers for Ticker, numeric
+        representations for Date) because dag_factory.py's validate_features_wrapper
+        enforces an all-numeric guard on the feature matrix before any pandera
+        schema runs, and rejects any non-numeric columns first.
     """
     return DataFrameSchema(
         columns={target_col: Column(float, nullable=True)},

@@ -116,9 +116,11 @@ def _select_features_schema_builder(problem_type: ProblemType) -> Callable[[str]
     Forecasting feature matrices carry a DatetimeIndex (row order/spacing is
     meaningful); finance feature matrices are a long-format panel (plain
     integer index, many rows sharing the same Date across assets); tabular
-    feature matrices carry a plain integer index too, but validated less
-    strictly (coerce=True vs finance's own coerce=True with room for
-    finance-specific column checks later - see build_finance_features_schema).
+    feature matrices carry a plain integer index too. Finance and tabular
+    feature schemas are currently structurally identical (both use coerce=True,
+    strict=False, and a plain integer index), kept as separate functions only
+    so finance-specific column requirements can be added later without touching
+    the tabular schema's contract.
 
     Args:
         problem_type: The pipeline's problem_type from pipeline.yaml.

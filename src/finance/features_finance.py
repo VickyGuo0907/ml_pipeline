@@ -23,6 +23,10 @@ def engineer_finance_features(
 
     Returns:
         Dictionary with feature matrix paths, shapes, and transform metadata.
+        The feature matrix must be entirely numeric (Ticker label-encoded as an int,
+        Date as a numeric/period column, no raw strings or datetimes) because
+        dag_factory.py's validate_features_wrapper enforces an all-numeric guard
+        on every pipeline's feature matrix before any pandera schema runs.
 
     Raises:
         NotImplementedError: Always - implemented in a later plan.
