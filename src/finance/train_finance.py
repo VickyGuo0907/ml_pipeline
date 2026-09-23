@@ -4,6 +4,20 @@ one cross-sectional GBM run across the whole panel, logging each model's
 training-period error standard deviation (the risk-analysis requirement's
 "how certain is your model?" figure, computed in-sample here - test-period
 scoring, rank-IC, and champion selection are a later plan's job).
+
+Reload contract per model_type (relevant to whichever later plan reloads
+these runs to score the test period): `random_walk`/`mean` are logged via
+`mlflow.pyfunc.log_model` and reload via `mlflow.pyfunc.load_model(...)`,
+but the returned `PyFuncModel` wrapper only exposes `.predict(df)` -
+`.forecast()` does not survive the mlflow round-trip. `arima` is logged via
+`mlflow.statsmodels.log_model` and must be reloaded via
+`mlflow.statsmodels.load_model(...)` (NOT `mlflow.pyfunc.load_model(...)`,
+which raises an `MlflowException` about `TimeSeriesModel` inputs) to get
+back the native `ARIMAResultsWrapper` with a working `.forecast(steps)`.
+`cross_sectional_gbm` is logged via `mlflow.lightgbm.log_model` and must be
+reloaded via `mlflow.lightgbm.load_model(...)` (NOT
+`mlflow.pyfunc.load_model(...).predict(...)`, which raises a `LightGBMError`
+about feature-count mismatch), then called as `.predict(df[feature_columns])`.
 """
 import logging
 from pathlib import Path
@@ -43,14 +57,12 @@ def _training_error_std(y_train: pd.Series, fittedvalues: pd.Series) -> float:
 
 def _train_one_per_asset_model(
     model_cfg: Any,
-    ticker: str,
     y_train: pd.Series,
 ) -> tuple[Any, str]:
     """Fit one random_walk/mean/arima model and return (fitted, mlflow flavor name).
 
     Args:
         model_cfg: ModelConfig (name, type, hyperparameters) from models.yaml.
-        ticker: This asset's ticker symbol, for logging only.
         y_train: This asset's training target series.
 
     Returns:
@@ -120,11 +132,16 @@ def train_finance_models(
                 asset_key = f"{model_cfg.name}_{ticker}"
                 try:
                     asset_df = train_df[train_df["ticker_encoded"] == code].sort_values("date_ordinal")
-                    y_train = asset_df[target_col]
+                    y_train = pd.Series(
+                        asset_df[target_col].to_numpy(),
+                        index=pd.PeriodIndex(
+                            [pd.Period(ordinal=int(n), freq="M") for n in asset_df["date_ordinal"]], freq="M",
+                        ),
+                    )
                     if len(y_train) < 2:
                         raise ValueError(f"Not enough training rows for {ticker} ({len(y_train)})")
 
-                    fitted, flavor = _train_one_per_asset_model(model_cfg, ticker, y_train)
+                    fitted, flavor = _train_one_per_asset_model(model_cfg, y_train)
 
                     with mlflow.start_run(run_name=f"{run_id}_{asset_key}"):
                         mlflow.set_tags({
@@ -136,16 +153,17 @@ def train_finance_models(
                         })
                         mlflow.log_param("train_rows", len(y_train))
                         mlflow.log_params({
-                            k: v for k, v in model_cfg.hyperparameters.items() if v is not None
+                            k: (v if v is not None else "null") for k, v in model_cfg.hyperparameters.items()
                         })
+
+                        train_error_std = _training_error_std(y_train, fitted.fittedvalues)
+                        mlflow.log_metric("train_error_std", train_error_std)
 
                         if flavor == "pyfunc":
                             mlflow.pyfunc.log_model(python_model=fitted, name="model")
                         else:
                             mlflow.statsmodels.log_model(fitted, name="model")
 
-                        train_error_std = _training_error_std(y_train, fitted.fittedvalues)
-                        mlflow.log_metric("train_error_std", train_error_std)
                         mlflow_run_id = mlflow.active_run().info.run_id
 
                     training_results["models"][asset_key] = {
@@ -171,6 +189,9 @@ def train_finance_models(
                         "pipeline_type": pipeline_config.pipeline_type,
                     })
                     mlflow.log_param("feature_count", len(feature_columns))
+                    mlflow.log_params({
+                        k: (v if v is not None else "null") for k, v in model_cfg.hyperparameters.items()
+                    })
                     mlflow.log_dict({"columns": feature_columns}, "feature_columns.json")
 
                     model = fit_cross_sectional_gbm(train_df, target_col, feature_columns, model_cfg.hyperparameters)
