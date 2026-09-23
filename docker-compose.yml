@@ -204,6 +204,13 @@ services:
       # itself refuses to start without SERVING_MODEL_NAME set, rather than
       # this compose file guessing which pipeline's model to serve.
       SERVING_MODEL_NAME: ${SERVING_MODEL_NAME}
+      # Only required when SERVING_MODEL_NAME points at a
+      # m6_returns_risk_cross_sectional_gbm deployment — that model isn't
+      # tied to one asset by training, so this tells serve.py which
+      # asset's latest features to use. Unused (and safe to leave unset)
+      # for every other model type. Empty string if unset in .env — not a
+      # startup failure, just a 400 if that endpoint is actually called.
+      SERVING_FINANCE_TICKER: ${SERVING_FINANCE_TICKER:-}
     ports:
       - "8000:8000"
     volumes:

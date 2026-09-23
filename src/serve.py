@@ -42,7 +42,11 @@ from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel, Field, RootModel
 
 from src.finance.rank_ic import reload_model
-from src.finance.serve_finance import forecast_per_asset_model, load_latest_asset_features
+from src.finance.serve_finance import (
+    forecast_arima_with_target_period,
+    forecast_per_asset_model,
+    load_latest_asset_features,
+)
 from src.forecasting.serve_forecast import forecast_with_gbm, forecast_with_statsmodels, load_latest_snapshot
 from src.utils.config import load_forecast_features_config, load_orchestration_config
 
@@ -364,10 +368,23 @@ class ForecastOutput(BaseModel):
 
 class FinanceForecastOutput(BaseModel):
     """Point forecast for one asset's log-return horizon_months out, plus
-    the model's logged test-period forecast-error std-dev."""
+    the model's logged test-period forecast-error std-dev.
 
-    prediction: float = Field(..., description="Predicted log-return at horizon_months out")
+    horizon_months counts months forward from the model's TRAINING
+    CUTOFF (the train/test split boundary) — NOT from today's date.
+    This pipeline's models are not refit on new data at serving time
+    (an acknowledged limitation, same category as pjm_load_forecast's
+    own statsmodels staleness note). For arima, target_period reports
+    the real calendar month this forecast targets; random_walk/mean
+    lose their timestamp across the MLflow pyfunc round-trip, so
+    target_period is null for those two types.
+    """
+
+    prediction: float = Field(..., description="Predicted log-return, horizon_months past the model's training cutoff")
     horizon_months: int
+    target_period: Optional[str] = Field(
+        None, description="Real calendar month this forecast targets (arima only; null for random_walk/mean/cross_sectional_gbm)",
+    )
     ticker: Optional[str] = Field(None, description="Asset this forecast is for")
     test_error_std: Optional[float] = Field(
         None, description="Model's logged test-period forecast-error std-dev — how certain is this model?",
@@ -559,6 +576,10 @@ async def predict_finance_return(
     cross_sectional_gbm deployments require SERVING_FINANCE_TICKER to be
     set and only support horizon_months=1 — see this module's SERVING_FINANCE_TICKER
     comment and this plan's Global Constraints for why.
+
+    horizon_months counts months forward from the model's training cutoff,
+    not from today — see GET /predict/finance-return's response schema
+    (target_period) for how to interpret this for arima.
     """
     if not _model_cache.get("is_finance"):
         raise HTTPException(
@@ -572,8 +593,12 @@ async def predict_finance_return(
         raise HTTPException(status_code=503, detail=f"No model loaded for '{SERVING_MODEL_NAME}'.")
 
     finance_model_type = _model_cache["finance_model_type"]
+    target_period: str | None = None
     try:
-        if finance_model_type in ("random_walk", "mean", "arima"):
+        if finance_model_type == "arima":
+            predictions, target_period = forecast_arima_with_target_period(_model_cache["model"], horizon_months)
+            prediction = float(predictions[-1])
+        elif finance_model_type in ("random_walk", "mean"):
             predictions = forecast_per_asset_model(_model_cache["model"], finance_model_type, horizon_months)
             prediction = float(predictions[-1])
         elif finance_model_type == "cross_sectional_gbm":
@@ -603,7 +628,10 @@ async def predict_finance_return(
                 load_orchestration_config(f"config/{pipeline_type}").directories.features if pipeline_type else None
             )
             feature_row = (
-                load_latest_asset_features(features_dir, SERVING_FINANCE_TICKER, feature_columns)
+                load_latest_asset_features(
+                    features_dir, SERVING_FINANCE_TICKER, feature_columns,
+                    target_col=_model_cache.get("target_col") or "log_return",
+                )
                 if features_dir and feature_columns else None
             )
             if feature_row is None:
@@ -626,6 +654,7 @@ async def predict_finance_return(
     return FinanceForecastOutput(
         prediction=prediction,
         horizon_months=horizon_months,
+        target_period=target_period,
         ticker=_model_cache.get("ticker") or SERVING_FINANCE_TICKER,
         test_error_std=_model_cache.get("test_error_std"),
         model_name=_model_cache["model_name"],

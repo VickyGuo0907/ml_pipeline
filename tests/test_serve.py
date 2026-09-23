@@ -535,6 +535,46 @@ class TestPredictFinanceReturnEndpoint:
         data = response.json()
         assert data["prediction"] == pytest.approx(0.025)
         assert data["test_error_std"] == pytest.approx(0.05)
+        # random_walk/mean lose their timestamp across the MLflow pyfunc
+        # round-trip — no absolute calendar label is derivable for them.
+        assert data["target_period"] is None
+
+    def test_returns_point_forecast_and_target_period_for_arima(self, monkeypatch):
+        """Real fitted+reloaded ARIMA model, fit on a series with a real
+        monthly PeriodIndex (Plan 3's contract) — the forecast must report
+        target_period as the real calendar month the LAST predicted value
+        targets, not just a relative horizon count."""
+        import tempfile
+        from src.finance.model_registry import fit_arima
+
+        tmp_dir = tempfile.mkdtemp()
+        mlflow_uri = f"sqlite:///{tmp_dir}/mlflow.db"
+        mlflow.set_tracking_uri(mlflow_uri)
+        mlflow.set_experiment("test_predict_finance_return_arima")
+
+        index = pd.period_range("2023-01", periods=8, freq="M")
+        y_train = pd.Series([0.01, 0.02, 0.015, 0.03, 0.025, 0.035, 0.03, 0.04], index=index)
+        fitted = fit_arima(y_train, {"order": [1, 0, 0]})
+        with mlflow.start_run() as run:
+            mlflow.statsmodels.log_model(fitted, name="model")
+            run_id = run.info.run_id
+
+        loaded = reload_model("arima", run_id, mlflow_uri)
+
+        _model_cache.update({
+            "model": loaded, "model_name": "test_arima_model", "model_version": "1", "model_stage": "Staging",
+            "is_finance": True, "finance_model_type": "arima", "ticker": "AAPL", "test_error_std": 0.04,
+        })
+
+        client = TestClient(app)
+        response = client.get("/predict/finance-return", params={"horizon_months": 3})
+
+        assert response.status_code == 200
+        data = response.json()
+        # Training data runs Jan-Aug 2023; forecasting 3 months past the
+        # training cutoff lands on Sep, Oct, Nov 2023 — the LAST predicted
+        # value targets Nov 2023.
+        assert data["target_period"] == "2023-11"
 
     def test_returns_400_for_cross_sectional_gbm_without_serving_finance_ticker_env_var(self, monkeypatch):
         """Monkeypatch _model_cache to a finance/cross_sectional_gbm shape
@@ -587,12 +627,17 @@ class TestPredictFinanceReturnEndpoint:
 
         feature_columns = ["lag_1_return", "trailing_12m_vol"]
         target_col = "log_return"
+        # AAPL needs >= 12 realized returns so load_latest_asset_features
+        # (Fix 1's next-period construction) has enough history to build
+        # trailing_12m_vol without hitting the "not enough history" guard.
+        aapl_returns = [0.01, 0.02, 0.03, 0.04, 0.05, 0.06, 0.07, 0.08, 0.09, 0.10, 0.11, 0.12]
+        n_aapl = len(aapl_returns)
         panel_df = pd.DataFrame({
-            "log_return": [0.01, 0.02, 0.03, 0.04],
-            "lag_1_return": [0.0, 0.01, 0.02, 0.03],
-            "trailing_12m_vol": [0.05, 0.05, 0.06, 0.06],
-            "ticker_encoded": [0, 0, 1, 1],
-            "date_ordinal": [700, 701, 700, 701],
+            "log_return": aapl_returns + [0.03, 0.04],
+            "lag_1_return": [0.0] + aapl_returns[:-1] + [0.0, 0.03],
+            "trailing_12m_vol": [0.05] * n_aapl + [0.05, 0.05],
+            "ticker_encoded": [0] * n_aapl + [1, 1],
+            "date_ordinal": list(range(700, 700 + n_aapl)) + [700, 701],
         })
         model = fit_cross_sectional_gbm(
             panel_df, target_col, feature_columns, {"n_estimators": 5, "max_depth": 2, "random_state": 0},
@@ -626,3 +671,4 @@ class TestPredictFinanceReturnEndpoint:
         data = response.json()
         assert isinstance(data["prediction"], float)
         assert data["finance_model_type"] == "cross_sectional_gbm"
+        assert data["target_period"] is None
