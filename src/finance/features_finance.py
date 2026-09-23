@@ -38,6 +38,17 @@ def engineer_finance_features(
     train_test_split fraction of months -> train, the rest -> test), not a
     single global date cutoff, since assets can have different date ranges.
 
+    date_ordinal is a time AXIS for sorting/joining/reporting, not a real
+    predictor: it is monotonic, so a tree-based model (LightGBM) would split
+    entirely on it since every TEST-period value is numerically above every
+    TRAINING value. It is recorded in the manifest's index_columns, not
+    feature_columns, so a later training stage that naively predictor-selects
+    via "every column except the target" does not hand it to the model. To
+    convert a date_ordinal value back to a human-readable month, use
+    `pd.Period(ordinal=n, freq="M")` -- NOT `pd.PeriodIndex(ordinals,
+    freq="M")`, which raises on this repo's pandas version when given raw
+    integer ordinals directly.
+
     Args:
         interim_dir: Directory containing cleaned interim data.
         features_dir: Output directory for feature matrices.
@@ -88,6 +99,21 @@ def engineer_finance_features(
     feature_df = feature_df.dropna()
     rows_dropped_warmup = rows_before_dropna - len(feature_df)
 
+    if feature_df.empty:
+        raise ValueError(
+            f"No rows survive warm-up (lag_months={features_config.lag_months}, "
+            f"volatility_window_months={features_config.volatility_window_months}) "
+            "for any asset — check that assets have enough history."
+        )
+
+    surviving_codes = set(feature_df["ticker_encoded"].unique())
+    dropped_tickers = [t for t, code in ticker_mapping.items() if code not in surviving_codes]
+    if dropped_tickers:
+        logger.warning(
+            "Assets with no surviving rows after warm-up (dropped entirely): %s",
+            sorted(dropped_tickers),
+        )
+
     train_parts = []
     test_parts = []
     for _, asset_rows in feature_df.groupby("ticker_encoded"):
@@ -108,13 +134,15 @@ def engineer_finance_features(
     write_parquet(train_df, train_path)
     write_parquet(test_df, test_path)
 
-    feature_columns = [c for c in train_df.columns if c != target_col]
+    index_columns = ["date_ordinal"]
+    feature_columns = [c for c in train_df.columns if c != target_col and c not in index_columns]
 
     write_manifest(features_path, {
         "run_id": run_id,
         "source": "engineered finance features",
         "stage": "feature_engineer_finance",
         "feature_columns": feature_columns,
+        "index_columns": index_columns,
         "ticker_mapping": ticker_mapping,
         "rows_dropped_warmup": rows_dropped_warmup,
         "train": {"path": str(train_path), "rows": len(train_df), "columns": len(train_df.columns)},

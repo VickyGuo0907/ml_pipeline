@@ -1,6 +1,7 @@
 """Tests for the finance feature engineering stage: per-asset lag/volatility
 features (no cross-asset leakage), ticker/date numeric encoding, and the
 chronological per-asset train/test split."""
+import logging
 from pathlib import Path
 
 import pandas as pd
@@ -216,4 +217,48 @@ class TestManifestAndReturn:
             manifest = yaml.safe_load(f)
         assert manifest["stage"] == "feature_engineer_finance"
         assert "log_return" not in manifest["feature_columns"]
+        assert "date_ordinal" not in manifest["feature_columns"]
+        assert manifest["index_columns"] == ["date_ordinal"]
         assert manifest["ticker_mapping"] == {"AAPL": 0}
+
+
+class TestEmptyAssetWarmup:
+    def test_warns_on_asset_with_no_surviving_rows(self, tmp_path, caplog):
+        interim_dir = tmp_path / "interim"
+        features_dir = tmp_path / "features"
+        config_dir = tmp_path / "config"
+        run_id = "2026-09-23"
+
+        # SHORT has only 5 months of history -- with lag_months=[1] and
+        # volatility_window_months=12, trailing_12m_vol needs 12 preceding
+        # shifted values, so every one of SHORT's rows is dropped by the
+        # warm-up dropna, while AAPL has enough history to survive.
+        df = _synthetic_panel({
+            "AAPL": [0.01 * i for i in range(20)],
+            "SHORT": [0.02, 0.03, 0.01, 0.04, 0.02],
+        })
+        _write_interim_fixture(interim_dir, run_id, df)
+        _write_finance_config(config_dir, lag_months=[1], volatility_window_months=12)
+
+        with caplog.at_level(logging.WARNING):
+            engineer_finance_features(interim_dir, features_dir, run_id, config_dir=config_dir)
+
+        assert "SHORT" in caplog.text
+
+    def test_raises_clear_error_when_every_asset_dropped(self, tmp_path):
+        interim_dir = tmp_path / "interim"
+        features_dir = tmp_path / "features"
+        config_dir = tmp_path / "config"
+        run_id = "2026-09-23"
+
+        # Both assets have far less history than volatility_window_months
+        # requires, so every row is dropped by the warm-up dropna.
+        df = _synthetic_panel({
+            "AAPL": [0.01, 0.02, 0.03],
+            "MSFT": [0.04, 0.05, 0.06],
+        })
+        _write_interim_fixture(interim_dir, run_id, df)
+        _write_finance_config(config_dir, lag_months=[1], volatility_window_months=12)
+
+        with pytest.raises(ValueError, match="No rows survive warm-up"):
+            engineer_finance_features(interim_dir, features_dir, run_id, config_dir=config_dir)
