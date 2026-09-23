@@ -8,13 +8,7 @@ so dag_factory.py's dispatch never has to special-case argument shape, and
 import pytest
 
 from src.finance.evaluate_finance import register_finance_models_to_mlflow
-from src.finance.features_finance import engineer_finance_features
 from src.finance.train_finance import train_finance_models
-
-
-def test_engineer_finance_features_not_implemented():
-    with pytest.raises(NotImplementedError):
-        engineer_finance_features("interim", "features", "2026-09-22", config_dir="config/m6_returns_risk")
 
 
 def test_train_finance_models_not_implemented():
