@@ -35,7 +35,7 @@ from src.forecasting.features_forecast import engineer_forecast_features  # noqa
 from src.forecasting.train_forecast import train_forecast_models  # noqa: E402
 from src.ingest import ingest_files  # noqa: E402
 from src.monitoring import generate_drift_report  # noqa: E402
-from src.profile import generate_mstl_report, profile_raw_files  # noqa: E402
+from src.profile import generate_adf_report, generate_mstl_report, profile_raw_files  # noqa: E402
 from src.train import train_models  # noqa: E402
 from src.utils.config import OrchestrationConfig, ProblemType, discover_pipelines, load_pipeline_config, load_pipeline_orchestration_config  # noqa: E402
 from src.utils.io import find_previous_run_id, resolve_run_path  # noqa: E402
@@ -204,7 +204,8 @@ def build_dag(config: OrchestrationConfig) -> DAG:
 
     def profile_wrapper(**context) -> dict:
         """Generate ydata-profiling HTML reports, plus an MSTL seasonality
-        decomposition report for forecasting pipelines."""
+        decomposition report for forecasting pipelines, or an ADF
+        stationarity report for finance pipelines."""
         run_id = _pull_run_id(context)
         result = profile_raw_files(
             raw_dir=config.directories.raw,
@@ -222,6 +223,16 @@ def build_dag(config: OrchestrationConfig) -> DAG:
                 )
             except Exception as e:
                 logger.warning("MSTL report generation failed: %s", e)
+        elif pipeline_cfg.problem_type == ProblemType.FINANCE:
+            try:
+                result["adf"] = generate_adf_report(
+                    raw_dir=config.directories.raw,
+                    run_id=run_id,
+                    reports_dir=config.directories.reports,
+                    config_dir=config.directories.config,
+                )
+            except Exception as e:
+                logger.warning("ADF report generation failed: %s", e)
         return result
 
     def clean_wrapper(**context) -> dict:

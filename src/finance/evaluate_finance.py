@@ -22,11 +22,34 @@ from typing import Any
 import mlflow
 import numpy as np
 import pandas as pd
+import yaml
 
 from src.evaluate import _write_evaluation_report
 from src.finance.rank_ic import reload_model, spearman_ic
 from src.utils.config import load_finance_models_config, load_pipeline_config
 from src.utils.io import load_manifest, resolve_run_path
+
+
+def _load_adf_summary(reports_dir: str | Path, run_id: str) -> dict[str, Any] | None:
+    """Pull through the ADF stationarity summary if the profile stage's
+    generate_adf_report has already produced one for this run (src/profile.py).
+    Returns None if that report doesn't exist yet for this run_id - this
+    function never fails or fabricates ADF numbers for a report file that
+    isn't there.
+
+    Args:
+        reports_dir: Pipeline reports directory.
+        run_id: Run identifier.
+
+    Returns:
+        Parsed ADF report dict (ticker -> {adf_statistic, p_value,
+        is_stationary, n_obs}), or None if not yet available.
+    """
+    adf_path = Path(reports_dir) / f"{run_id}_adf_report.yaml"
+    if not adf_path.exists():
+        return None
+    with open(adf_path) as f:
+        return yaml.safe_load(f)
 
 logger = logging.getLogger(__name__)
 
@@ -206,6 +229,7 @@ def register_finance_models_to_mlflow(
         "ADF stationarity analysis is generated separately by the pipeline's "
         "profile stage (src/profile.py's generate_adf_report), not duplicated here."
     )
+    report["adf_summary"] = _load_adf_summary(reports_dir, run_id)
     report["scoring_methodology_note"] = (
         "random_walk/mean/arima are scored with a STATIC multi-step forecast "
         "(fitted once, forecasting the entire test horizon from the train "

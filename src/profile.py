@@ -9,8 +9,10 @@ import matplotlib
 matplotlib.use("Agg")  # headless — this module runs inside an Airflow worker, never a GUI context
 import matplotlib.pyplot as plt
 import pandas as pd
+import yaml
 import ydata_profiling.model.pandas.describe_categorical_pandas as _ydp_cat
 from statsmodels.tsa.seasonal import MSTL
+from statsmodels.tsa.stattools import adfuller
 from ydata_profiling import ProfileReport
 
 from src.utils.config import load_pipeline_config
@@ -221,3 +223,106 @@ def generate_mstl_report(
 
     logger.info("MSTL report written: %s (periods=%s)", report_path, periods)
     return {"report_path": str(report_path), "periods_used": periods}
+
+
+def generate_adf_report(
+    raw_dir: str | Path,
+    run_id: str,
+    reports_dir: str | Path = "reports",
+    config_dir: str | Path = "config",
+) -> dict[str, Any]:
+    """Generate an ADF (Augmented Dickey-Fuller) stationarity diagnostic
+    report for a finance pipeline's raw long-format return panel.
+
+    Runs one ADF test per asset directly on its raw log-return series - no
+    dependency on the clean/features stages, which run later in the DAG's
+    fixed task order (mirrors generate_mstl_report's independence from
+    clean for pjm_load_forecast). Writes both a human-readable HTML report
+    and a YAML summary (reports/<pipeline>/<run_id>_adf_report.yaml, in
+    exactly the shape src.finance.evaluate_finance._load_adf_summary
+    already reads back) — satisfies requirement #1 (confirm return-
+    stationarity, discuss the Random Walk benchmark).
+
+    Args:
+        raw_dir: Base directory containing raw data.
+        run_id: Run identifier to locate data.
+        reports_dir: Output directory for the HTML/YAML reports.
+        config_dir: Pipeline config directory.
+
+    Returns:
+        Dictionary with report_path, yaml_path, and per-ticker ADF results.
+
+    Raises:
+        FileNotFoundError: If the raw manifest is absent.
+        ValueError: If the raw directory doesn't have exactly one file, or
+            the file's format is unsupported.
+    """
+    raw_path = resolve_run_path(raw_dir, run_id)
+    manifest = load_manifest(raw_path)  # raises FileNotFoundError if absent
+
+    files = list(manifest.get("files", {}))
+    if len(files) != 1:
+        raise ValueError(
+            f"Expected exactly one raw file for a finance pipeline, found "
+            f"{len(files)}: {files}"
+        )
+    filename = files[0]
+    reader = READERS.get(Path(filename).suffix.lower())
+    if reader is None:
+        raise ValueError(f"Unsupported file format: {filename}")
+
+    pipeline_config = load_pipeline_config(config_dir)
+    target_col = pipeline_config.target.name
+
+    df = reader(raw_path / filename)
+    df["Date"] = pd.to_datetime(df["Date"])
+
+    adf_results: dict[str, dict[str, Any]] = {}
+    for ticker, asset_df in df.groupby("Ticker"):
+        series = asset_df.sort_values("Date")[target_col].dropna()
+        if len(series) < 8:
+            logger.warning("Skipping ADF test for %s: only %d observations", ticker, len(series))
+            continue
+        adf_statistic, p_value, _, n_obs, _, _ = adfuller(series, autolag="AIC")
+        adf_results[ticker] = {
+            "adf_statistic": float(adf_statistic),
+            "p_value": float(p_value),
+            "is_stationary": bool(p_value < 0.05),
+            "n_obs": int(n_obs),
+        }
+
+    reports_path = Path(reports_dir)
+    reports_path.mkdir(parents=True, exist_ok=True)
+    yaml_path = reports_path / f"{run_id}_adf_report.yaml"
+    with open(yaml_path, "w") as f:
+        yaml.dump(adf_results, f, default_flow_style=False, sort_keys=False)
+
+    n_stationary = sum(1 for r in adf_results.values() if r["is_stationary"])
+    n_total = len(adf_results)
+    rw_discussion = (
+        f"{n_stationary}/{n_total} assets' monthly log-returns reject the unit-root "
+        f"null hypothesis at p&lt;0.05 (i.e. are stationary) - consistent with the "
+        f"Efficient Market Hypothesis's implication that returns (unlike price "
+        f"levels, which are almost never stationary) should not be predictable "
+        f"from their own past values alone, motivating the Random Walk as a "
+        f"legitimate baseline rather than a naive strawman."
+    )
+
+    rows_html = "".join(
+        f"<tr><td>{ticker}</td><td>{r['adf_statistic']:.4f}</td><td>{r['p_value']:.4f}</td>"
+        f"<td>{'Stationary' if r['is_stationary'] else 'Non-stationary'}</td><td>{r['n_obs']}</td></tr>"
+        for ticker, r in sorted(adf_results.items())
+    )
+    html = (
+        f"<html><head><title>ADF Stationarity Report — {run_id}</title></head>"
+        f"<body><h1>ADF Stationarity Report — {filename} ({run_id})</h1>"
+        f"<table border='1'><tr><th>Ticker</th><th>ADF statistic</th><th>p-value</th>"
+        f"<th>Result (p&lt;0.05)</th><th>N obs</th></tr>{rows_html}</table>"
+        f"<h2>Random Walk benchmark discussion</h2><p>{rw_discussion}</p>"
+        f"</body></html>"
+    )
+    report_path = reports_path / f"{run_id}_adf_report.html"
+    report_path.write_text(html)
+
+    logger.info("ADF report written: %s (%d/%d assets stationary)", report_path, n_stationary, n_total)
+    return {"report_path": str(report_path), "yaml_path": str(yaml_path), "adf_results": adf_results}
