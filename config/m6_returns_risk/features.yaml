@@ -1,0 +1,6 @@
+# Random Walk/Mean/ARIMA consume each asset's raw return series directly -
+# these settings are only used by the cross-sectional GBM's small feature
+# set (lag_months -> lag_1_return, volatility_window_months -> a trailing
+# rolling-std volatility feature).
+lag_months: [1]
+volatility_window_months: 12

@@ -1,0 +1,36 @@
+# Four models compared per run: two trivial baselines (Random Walk, Mean -
+# the "shrinkage" estimator), one classical statistical model (ARIMA, the
+# "complex model" foil), and one cross-sectional ML model trained across
+# the whole asset panel at once. Model orders/hyperparameters are fixed
+# here, not searched - consistent with the project's existing ban on
+# automated hyperparameter search (Optuna/Ray Tune are out of scope).
+# Champion selection happens per model TYPE (aggregating that type's
+# per-asset runs into a rank correlation / Information Coefficient), not
+# per individual run - see FinanceEvaluationConfig.
+
+models:
+  - name: "m6_returns_risk_random_walk"
+    type: "random_walk"
+    hyperparameters: {}
+
+  - name: "m6_returns_risk_mean"
+    type: "mean"
+    hyperparameters:
+      window: null   # null = full history; a real value would use only the trailing N months
+
+  - name: "m6_returns_risk_arima"
+    type: "arima"
+    hyperparameters:
+      order: [1, 0, 0]
+
+  - name: "m6_returns_risk_cross_sectional_gbm"
+    type: "cross_sectional_gbm"
+    hyperparameters:
+      n_estimators: 100
+      max_depth: 4
+      learning_rate: 0.05
+      random_state: 42
+      n_jobs: -1
+
+evaluation:
+  champion_metric: "rank_ic"

@@ -545,3 +545,37 @@ def test_finance_configs_reexported_from_utils_package():
     assert callable(load_finance_cleaning_config)
     assert callable(load_finance_features_config)
     assert callable(load_finance_models_config)
+
+
+M6_RETURNS_RISK_CONFIG = "config/m6_returns_risk"
+
+
+def test_load_m6_returns_risk_pipeline_config():
+    """The m6_returns_risk pipeline.yaml loads with problem_type=finance."""
+    config = load_pipeline_config(M6_RETURNS_RISK_CONFIG)
+    assert config.problem_type == ProblemType.FINANCE
+    assert config.target.name == "log_return"
+    assert config.pipeline_type == "m6_returns_risk"
+    assert len(config.sources) == 1
+
+
+def test_load_m6_returns_risk_recipe_configs():
+    """The m6_returns_risk cleaning/features/models YAMLs load against the finance config classes."""
+    cleaning = load_finance_cleaning_config(M6_RETURNS_RISK_CONFIG)
+    features = load_finance_features_config(M6_RETURNS_RISK_CONFIG)
+    models = load_finance_models_config(M6_RETURNS_RISK_CONFIG)
+
+    assert cleaning.max_gap_months >= 1
+    assert features.lag_months
+    model_types = {m.type for m in models.models}
+    assert model_types == {"random_walk", "mean", "arima", "cross_sectional_gbm"}
+
+
+def test_load_m6_returns_risk_orchestration_config():
+    """The m6_returns_risk orchestration.yaml merges with base defaults like the other pipelines."""
+    config = load_pipeline_orchestration_config(M6_RETURNS_RISK_CONFIG, base_dir="config/base")
+    assert config.dag.dag_id == "m6_returns_risk_pipeline"
+    assert config.directories.landing == "data/m6_returns_risk/landing"
+    assert config.directories.config == "config/m6_returns_risk"
+    assert config.tasks.enabled.unsupervised_explore is False
+    assert config.tasks.enabled.drift_report is False

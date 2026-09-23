@@ -1,0 +1,58 @@
+# M6 Returns & Risk Pipeline
+# Monthly log-returns for a representative panel of liquid US-listed ETFs
+# and stocks, forecasting next-month return and reporting each model's
+# forecast-error uncertainty. Long-format panel (Date, Ticker, log_return)
+# staged into data/m6_returns_risk/landing/ by a later plan's
+# scripts/stage_m6_returns_risk_landing.py via the yfinance library - not
+# committed to the repo. The specific tickers live in that staging script's
+# module-level constants, not here - see this plan's Global Constraints.
+# Track 2 - Finance: Returns and Risk (M6 Competition):
+# https://arxiv.org/pdf/2310.13357
+
+pipeline_type: m6_returns_risk
+
+sources:
+  - name: "m6_returns_risk"
+    path: "data/m6_returns_risk/landing"
+    format: "csv"
+
+target:
+  name: "log_return"
+  type: "continuous"
+
+problem_type: "finance"
+
+# Fraction of each asset's chronological timeline kept as train; the most
+# recent 20% is held out as test. NOT a random split - return forecasting
+# splits must preserve time order, same reasoning as pjm_load_forecast.
+train_test_split: 0.80
+
+random_state: 42
+
+validation:
+  required_columns:
+    - "Date"
+    - "Ticker"
+    - "log_return"
+  min_rows: 500
+
+  per_file_schemas:
+    - file_pattern: "m6_returns_panel"
+      required_columns:
+        - "Date"
+        - "Ticker"
+        - "log_return"
+      numeric_bounds:
+        "log_return":
+          min: -1.0
+          max: 1.0   # a >100% single-month log-return is almost certainly a data error, not a real move
+      min_rows: 500
+
+profiling:
+  minimal: false
+
+unsupervised:
+  enabled: false   # PCA/k-means don't apply to per-asset return series
+
+benchmark:
+  enabled: false   # champion/challenger for this pipeline is not designed - see the spec's Out of scope

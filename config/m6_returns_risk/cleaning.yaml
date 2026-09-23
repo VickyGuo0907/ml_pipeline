@@ -1,0 +1,6 @@
+# Gap-handling for the monthly return panel. A missing month per asset is
+# filled if short; a longer gap fails loud rather than being silently
+# papered over, since a smoothed-over multi-month gap would corrupt any
+# lag/volatility feature computed across it.
+max_gap_months: 2
+fill_strategy: "interpolate"

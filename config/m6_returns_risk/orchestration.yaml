@@ -1,0 +1,29 @@
+dag:
+  dag_id: m6_returns_risk_pipeline
+  owner: data-eng
+  description: "M6 Returns & Risk - Random Walk/Mean/ARIMA/cross-sectional GBM comparison on monthly log-returns, ranked by cross-sectional Information Coefficient"
+  schedule: "@monthly"
+  catchup: false
+  tags:
+    - ml
+    - finance
+    - forecasting
+
+tasks:
+  retries: 1
+  retry_delay_minutes: 5
+  train_models_retries: 0
+  enabled:
+    profile: true
+    unsupervised_explore: false   # not applicable to per-asset return series
+    drift_report: false            # no finance-specific drift comparison design - see the spec's Out of scope
+
+directories:
+  landing: data/m6_returns_risk/landing
+  raw: data/m6_returns_risk/raw
+  interim: data/m6_returns_risk/interim
+  features: data/m6_returns_risk/features
+  benchmark: data/m6_returns_risk/benchmark
+  reports: reports/m6_returns_risk
+  config: config/m6_returns_risk
+  reports_base_url: "http://localhost:8888/m6_returns_risk"
