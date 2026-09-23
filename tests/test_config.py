@@ -5,6 +5,10 @@ from src.utils.config import (
     BenchmarkConfig,
     CleaningConfig,
     FeaturesConfig,
+    FinanceCleaningConfig,
+    FinanceEvaluationConfig,
+    FinanceFeaturesConfig,
+    FinanceModelsConfig,
     ForecastCleaningConfig,
     ForecastEvaluationConfig,
     ForecastFeaturesConfig,
@@ -19,6 +23,9 @@ from src.utils.config import (
     discover_pipelines,
     load_cleaning_config,
     load_features_config,
+    load_finance_cleaning_config,
+    load_finance_features_config,
+    load_finance_models_config,
     load_forecast_cleaning_config,
     load_forecast_features_config,
     load_forecast_models_config,
@@ -470,3 +477,71 @@ def test_forecast_features_config_accepts_snapshot_hours_at_the_boundary():
 def test_problem_type_has_finance_value():
     """ProblemType gains a FINANCE member for the new m6_returns_risk pipeline."""
     assert ProblemType.FINANCE.value == "finance"
+
+
+def test_finance_cleaning_config_defaults():
+    """FinanceCleaningConfig has sane defaults so an empty cleaning.yaml still validates."""
+    config = FinanceCleaningConfig()
+    assert config.max_gap_months == 2
+    assert config.fill_strategy == "interpolate"
+
+
+def test_finance_features_config_defaults():
+    """FinanceFeaturesConfig has sane defaults so an empty features.yaml still validates."""
+    config = FinanceFeaturesConfig()
+    assert config.lag_months == [1]
+    assert config.volatility_window_months == 12
+
+
+def test_finance_models_config_requires_models():
+    """FinanceModelsConfig requires at least the models list to be supplied."""
+    config = FinanceModelsConfig(
+        models=[{"name": "random_walk_model", "type": "random_walk", "hyperparameters": {}}],
+    )
+    assert config.models[0].type == "random_walk"
+    assert config.evaluation.champion_metric == "rank_ic"
+
+
+def test_load_finance_configs_from_yaml(tmp_path):
+    """The three finance config loaders read and validate YAML files, matching the existing load_*_config pattern."""
+    (tmp_path / "cleaning.yaml").write_text("max_gap_months: 3\nfill_strategy: ffill\n")
+    (tmp_path / "features.yaml").write_text("lag_months: [1, 3]\nvolatility_window_months: 6\n")
+    (tmp_path / "models.yaml").write_text(
+        "models:\n"
+        "  - name: arima_model\n"
+        "    type: arima\n"
+        "    hyperparameters: {order: [1, 0, 0]}\n"
+    )
+
+    cleaning = load_finance_cleaning_config(tmp_path)
+    features = load_finance_features_config(tmp_path)
+    models = load_finance_models_config(tmp_path)
+
+    assert isinstance(cleaning, FinanceCleaningConfig)
+    assert cleaning.max_gap_months == 3
+    assert isinstance(features, FinanceFeaturesConfig)
+    assert features.lag_months == [1, 3]
+    assert isinstance(models, FinanceModelsConfig)
+    assert models.models[0].name == "arima_model"
+
+
+def test_finance_configs_reexported_from_utils_package():
+    """Finance config classes/loaders are importable from src.utils directly,
+    matching how the forecast config classes are already re-exported there."""
+    from src.utils import (
+        FinanceCleaningConfig,
+        FinanceEvaluationConfig,
+        FinanceFeaturesConfig,
+        FinanceModelsConfig,
+        load_finance_cleaning_config,
+        load_finance_features_config,
+        load_finance_models_config,
+    )
+
+    assert FinanceCleaningConfig is not None
+    assert FinanceEvaluationConfig is not None
+    assert FinanceFeaturesConfig is not None
+    assert FinanceModelsConfig is not None
+    assert callable(load_finance_cleaning_config)
+    assert callable(load_finance_features_config)
+    assert callable(load_finance_models_config)

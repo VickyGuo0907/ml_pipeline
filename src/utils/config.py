@@ -487,6 +487,92 @@ class ForecastModelsConfig(BaseModel):
     evaluation: ForecastEvaluationConfig = Field(default_factory=ForecastEvaluationConfig)
 
 
+class FinanceCleaningConfig(BaseModel):
+    """Gap-handling rules for the finance clean stage.
+
+    A monthly return panel can have missing months per asset (new listing,
+    temporary halt, data provider gap). Short gaps are filled; longer ones
+    fail loud, mirroring ForecastCleaningConfig's reasoning for the hourly
+    PJM series — papering over a long gap would corrupt any lag/volatility
+    feature computed across it.
+    """
+
+    max_gap_months: int = Field(
+        default=2, ge=1,
+        description="Gaps longer than this many months fail the clean stage instead of being filled",
+    )
+    fill_strategy: Literal["interpolate", "ffill"] = Field(
+        default="interpolate",
+        description="How gaps at or under max_gap_months are filled",
+    )
+
+
+class FinanceFeaturesConfig(BaseModel):
+    """Feature engineering settings for the finance feature stage.
+
+    Random Walk/Mean/ARIMA consume each asset's raw return series directly
+    (no engineered features). Only the cross-sectional GBM needs these — a
+    small, fixed feature set (a lag and a trailing volatility window), not
+    the large lag/rolling/calendar vocabulary the hourly PJM pipeline needs,
+    since a monthly return series has no meaningful calendar/holiday
+    seasonality to encode.
+    """
+
+    lag_months: list[int] = Field(
+        default_factory=lambda: [1],
+        description="Lag months to compute as features for the cross-sectional GBM, e.g. [1] for t-1 month",
+    )
+    volatility_window_months: int = Field(
+        default=12, ge=1,
+        description="Trailing window (months) for the rolling-std volatility feature",
+    )
+
+
+class FinanceEvaluationConfig(BaseModel):
+    """Cross-sectional rank-correlation evaluation settings for the finance
+    train/evaluate stages.
+
+    Point-accuracy metrics (MAPE, RMSE) are close to meaningless for returns
+    that hover near/cross zero. This pipeline instead scores each model TYPE
+    by Spearman rank correlation between predicted and actual returns across
+    assets, computed per test month and averaged across months into an
+    Information Coefficient (IC) — directly reflecting the brief's
+    rank-driven long/short industry insight.
+    """
+
+    champion_metric: Literal["rank_ic"] = Field(
+        default="rank_ic",
+        description=(
+            "How the run champion (a model TYPE, not an individual asset run) is "
+            "chosen - average Spearman rank correlation between predicted and "
+            "actual returns across assets, per test month, averaged across the "
+            "test period"
+        ),
+    )
+
+
+class FinanceModelsConfig(BaseModel):
+    """Models configuration for a finance returns/risk pipeline.
+
+    Mirrors the shape of ForecastModelsConfig (models/random_state/
+    train_test_split + a single evaluation block), but champion_metric is
+    rank_ic instead of cv_mape, and champion selection happens per model
+    TYPE (aggregating that type's per-asset runs), not per individual run —
+    see FinanceEvaluationConfig and this pipeline's evaluate_finance.py
+    (implemented in a later plan).
+    """
+
+    models: list[ModelConfig] = Field(
+        ..., description="Model definitions (types: random_walk, mean, arima, cross_sectional_gbm)",
+    )
+    random_state: int = Field(default=42)
+    train_test_split: float = Field(
+        default=0.8, ge=0.0, le=1.0,
+        description="Fraction of each asset's chronological timeline kept as train; the rest (most recent) is test",
+    )
+    evaluation: FinanceEvaluationConfig = Field(default_factory=FinanceEvaluationConfig)
+
+
 class ModelsConfig(BaseModel):
     """Models configuration."""
 
@@ -694,6 +780,42 @@ def load_forecast_models_config(config_dir: str | Path = "config") -> ForecastMo
         Validated ForecastModelsConfig
     """
     return _load_typed_config(config_dir, "models.yaml", ForecastModelsConfig)
+
+
+def load_finance_cleaning_config(config_dir: str | Path = "config") -> FinanceCleaningConfig:
+    """Load and validate finance cleaning configuration.
+
+    Args:
+        config_dir: Directory containing config files
+
+    Returns:
+        Validated FinanceCleaningConfig
+    """
+    return _load_typed_config(config_dir, "cleaning.yaml", FinanceCleaningConfig)
+
+
+def load_finance_features_config(config_dir: str | Path = "config") -> FinanceFeaturesConfig:
+    """Load and validate finance feature engineering configuration.
+
+    Args:
+        config_dir: Directory containing config files
+
+    Returns:
+        Validated FinanceFeaturesConfig
+    """
+    return _load_typed_config(config_dir, "features.yaml", FinanceFeaturesConfig)
+
+
+def load_finance_models_config(config_dir: str | Path = "config") -> FinanceModelsConfig:
+    """Load and validate finance models configuration.
+
+    Args:
+        config_dir: Directory containing config files
+
+    Returns:
+        Validated FinanceModelsConfig
+    """
+    return _load_typed_config(config_dir, "models.yaml", FinanceModelsConfig)
 
 
 def load_orchestration_config(config_dir: str | Path = "config") -> OrchestrationConfig:
