@@ -8,14 +8,19 @@ from pathlib import Path
 
 from src.dags.dag_factory import (
     _select_features_schema_builder,
+    _select_finance_stage_functions,
     _select_forecasting_stage_functions,
     build_dag,
 )
+from src.finance.clean_finance import clean_finance_data
+from src.finance.evaluate_finance import register_finance_models_to_mlflow
+from src.finance.features_finance import engineer_finance_features
+from src.finance.train_finance import train_finance_models
 from src.forecasting.clean_forecast import clean_forecast_data
 from src.forecasting.evaluate_forecast import register_forecast_models_to_mlflow
 from src.forecasting.features_forecast import engineer_forecast_features
 from src.forecasting.train_forecast import train_forecast_models
-from src.schemas.features import build_features_schema, build_forecast_features_schema
+from src.schemas.features import build_features_schema, build_finance_features_schema, build_forecast_features_schema
 from src.utils.config import ProblemType, load_pipeline_orchestration_config
 
 
@@ -36,9 +41,27 @@ def test_select_forecasting_stage_functions_for_regression():
 
 
 def test_select_features_schema_builder_dispatch():
-    """The schema builder dispatch picks the DatetimeIndex schema only for forecasting."""
+    """The schema builder dispatch picks the right schema per problem_type."""
     assert _select_features_schema_builder(ProblemType.FORECASTING) is build_forecast_features_schema
+    assert _select_features_schema_builder(ProblemType.FINANCE) is build_finance_features_schema
     assert _select_features_schema_builder(ProblemType.REGRESSION) is build_features_schema
+
+
+def test_select_finance_stage_functions_for_finance():
+    """A finance problem_type returns the four finance stage functions."""
+    functions = _select_finance_stage_functions(ProblemType.FINANCE)
+    assert functions is not None
+    assert functions["clean"] is clean_finance_data
+    assert functions["features"] is engineer_finance_features
+    assert functions["train"] is train_finance_models
+    assert functions["register"] is register_finance_models_to_mlflow
+
+
+def test_select_finance_stage_functions_for_regression():
+    """A non-finance problem_type returns None - dag_factory falls back to tabular functions."""
+    assert _select_finance_stage_functions(ProblemType.REGRESSION) is None
+    assert _select_finance_stage_functions(ProblemType.CLASSIFICATION) is None
+    assert _select_finance_stage_functions(ProblemType.FORECASTING) is None
 
 
 def test_pjm_forecast_dag_builds_with_expected_task_ids():
@@ -61,6 +84,18 @@ def test_hospital_readmission_lagged_dag_still_builds_unchanged():
     dag = build_dag(config)
     assert dag.dag_id == "hospital_readmission_lagged_pipeline"
     assert "07_train_models" in dag.task_ids
+
+
+def test_m6_returns_risk_dag_builds_with_expected_task_ids():
+    """The m6_returns_risk DAG builds and exposes the same 9-stage task ID set as every other pipeline."""
+    config = load_pipeline_orchestration_config("config/m6_returns_risk", base_dir="config/base")
+    dag = build_dag(config)
+    task_ids = set(dag.task_ids)
+    assert "04_clean_data" in task_ids
+    assert "05_engineer_features" in task_ids
+    assert "07_train_models" in task_ids
+    assert "08_register_to_mlflow" in task_ids
+    assert dag.dag_id == "m6_returns_risk_pipeline"
 
 
 def test_dispatch_wrapper_docstrings_are_dispatch_aware():

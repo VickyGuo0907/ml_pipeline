@@ -25,6 +25,10 @@ from src.clean import clean_raw_data  # noqa: E402
 from src.evaluate import register_models_to_mlflow  # noqa: E402
 from src.explore import run_unsupervised_analysis  # noqa: E402
 from src.features import engineer_features  # noqa: E402
+from src.finance.clean_finance import clean_finance_data  # noqa: E402
+from src.finance.evaluate_finance import register_finance_models_to_mlflow  # noqa: E402
+from src.finance.features_finance import engineer_finance_features  # noqa: E402
+from src.finance.train_finance import train_finance_models  # noqa: E402
 from src.forecasting.clean_forecast import clean_forecast_data  # noqa: E402
 from src.forecasting.evaluate_forecast import register_forecast_models_to_mlflow  # noqa: E402
 from src.forecasting.features_forecast import engineer_forecast_features  # noqa: E402
@@ -38,7 +42,7 @@ from src.utils.io import find_previous_run_id, resolve_run_path  # noqa: E402
 from src.validate import validate_raw_files  # noqa: E402
 
 import pandas as pd  # noqa: E402
-from src.schemas.features import build_features_schema, build_forecast_features_schema  # noqa: E402
+from src.schemas.features import build_features_schema, build_finance_features_schema, build_forecast_features_schema  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -81,22 +85,53 @@ def _select_forecasting_stage_functions(problem_type: ProblemType) -> dict[str, 
     }
 
 
+def _select_finance_stage_functions(problem_type: ProblemType) -> dict[str, Callable] | None:
+    """Return finance stage functions for a finance pipeline, else None.
+
+    None signals "use the default tabular functions" - build_dag() falls
+    back to clean_raw_data/engineer_features/train_models/register_models_to_mlflow
+    unchanged for every problem_type except finance, so the three tabular
+    pipelines and pjm_load_forecast (forecasting) are unaffected by this
+    dispatch.
+
+    Args:
+        problem_type: The pipeline's problem_type from pipeline.yaml.
+
+    Returns:
+        Dict of the four finance stage functions, or None.
+    """
+    if problem_type != ProblemType.FINANCE:
+        return None
+    return {
+        "clean": clean_finance_data,
+        "features": engineer_finance_features,
+        "train": train_finance_models,
+        "register": register_finance_models_to_mlflow,
+    }
+
+
 def _select_features_schema_builder(problem_type: ProblemType) -> Callable[[str], Any]:
     """Return the feature-matrix schema builder appropriate for this problem_type.
 
     Forecasting feature matrices carry a DatetimeIndex (row order/spacing is
-    meaningful); tabular feature matrices carry a plain integer index. The
-    two schemas differ only in that index type.
+    meaningful); finance feature matrices are a long-format panel (plain
+    integer index, many rows sharing the same Date across assets); tabular
+    feature matrices carry a plain integer index too, but validated less
+    strictly (coerce=True vs finance's own coerce=True with room for
+    finance-specific column checks later - see build_finance_features_schema).
 
     Args:
         problem_type: The pipeline's problem_type from pipeline.yaml.
 
     Returns:
         build_forecast_features_schema for forecasting pipelines,
+        build_finance_features_schema for finance pipelines,
         build_features_schema for every other problem_type.
     """
     if problem_type == ProblemType.FORECASTING:
         return build_forecast_features_schema
+    if problem_type == ProblemType.FINANCE:
+        return build_finance_features_schema
     return build_features_schema
 
 
@@ -110,11 +145,17 @@ def build_dag(config: OrchestrationConfig) -> DAG:
         Configured Airflow DAG with all pipeline tasks wired
     """
     pipeline_cfg = load_pipeline_config(config.directories.config)
-    _forecast_fns = _select_forecasting_stage_functions(pipeline_cfg.problem_type)
-    _clean_fn = _forecast_fns["clean"] if _forecast_fns else clean_raw_data
-    _features_fn = _forecast_fns["features"] if _forecast_fns else engineer_features
-    _train_fn = _forecast_fns["train"] if _forecast_fns else train_models
-    _register_fn = _forecast_fns["register"] if _forecast_fns else register_models_to_mlflow
+    # Exactly one of these returns non-None for any given problem_type (or
+    # neither does, for tabular) - forecasting is checked first only because
+    # it was added first, the two are mutually exclusive by construction.
+    _stage_fns = (
+        _select_forecasting_stage_functions(pipeline_cfg.problem_type)
+        or _select_finance_stage_functions(pipeline_cfg.problem_type)
+    )
+    _clean_fn = _stage_fns["clean"] if _stage_fns else clean_raw_data
+    _features_fn = _stage_fns["features"] if _stage_fns else engineer_features
+    _train_fn = _stage_fns["train"] if _stage_fns else train_models
+    _register_fn = _stage_fns["register"] if _stage_fns else register_models_to_mlflow
     _features_schema_builder = _select_features_schema_builder(pipeline_cfg.problem_type)
 
     default_args = {
