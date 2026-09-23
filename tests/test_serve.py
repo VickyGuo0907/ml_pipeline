@@ -17,6 +17,7 @@ import pytest
 from fastapi.testclient import TestClient
 from unittest.mock import MagicMock
 
+from src.finance.rank_ic import reload_model
 from src.serve import app, _load_model, _model_cache
 
 
@@ -39,6 +40,7 @@ _CACHE_DEFAULTS = {
     "boxcox_lambda": None, "boxcox_offset": None, "feature_columns": None, "target_col": None,
     "is_forecasting": False, "forecast_model_type": None, "pipeline_type": None,
     "lags": None, "rolling_windows": None, "calendar_features": None, "holiday_features": None,
+    "is_finance": False, "finance_model_type": None, "ticker": None, "test_error_std": None,
 }
 
 
@@ -373,3 +375,254 @@ class TestPredictForecastEndpoint:
         data = response.json()
         assert len(data["predictions"]) == 6
         assert data["forecast_model_type"] == "ets"
+
+
+class TestFinanceDispatch:
+    """Tests for the finance-model detection and reload path added to
+    _load_model. Tabular AND forecasting models (no train_error_std metric)
+    must be completely unaffected — these tests exercise ONLY the new
+    finance branch."""
+
+    def test_detects_finance_model_via_train_error_std_metric(self, tmp_path, monkeypatch):
+        """The presence of train_error_std (never logged by tabular
+        src/train.py or forecasting src/forecasting/train_forecast.py) is
+        the sole signal used to route to the finance reload path."""
+        from src.finance.model_registry import fit_mean
+
+        mlflow_uri = f"sqlite:///{tmp_path / 'mlflow.db'}"
+        mlflow.set_tracking_uri(mlflow_uri)
+        mlflow.set_experiment("test_finance_dispatch_mean")
+
+        model_name = "test_finance_mean_model"
+        y_train = pd.Series([0.01, 0.02, 0.03, 0.04])
+        fitted = fit_mean(y_train, {"window": None})
+
+        with mlflow.start_run():
+            mlflow.set_tags({"model_type": "mean", "ticker": "AAPL", "pipeline_type": "test_m6_returns_risk"})
+            mlflow.log_metric("train_error_std", 0.01)
+            mlflow.pyfunc.log_model(python_model=fitted, name="model", registered_model_name=model_name)
+
+        client = mlflow.tracking.MlflowClient(tracking_uri=mlflow_uri)
+        version = client.get_latest_versions(model_name)[0]
+        client.set_model_version_tag(model_name, version.version, "test_error_std", "0.012345")
+        client.transition_model_version_stage(name=model_name, version=version.version, stage="Production")
+
+        monkeypatch.setattr("src.serve.MLFLOW_TRACKING_URI", mlflow_uri)
+
+        result = _load_model(model_name)
+
+        assert result is not None
+        assert result["is_finance"] is True
+        assert result["finance_model_type"] == "mean"
+        assert result["ticker"] == "AAPL"
+        assert result["test_error_std"] == pytest.approx(0.012345)
+
+    def test_forecasting_model_unaffected_by_new_dispatch(self, tmp_path, monkeypatch):
+        """A forecasting run (cv_mape_mean present, no train_error_std) must
+        load exactly as pjm_load_forecast's Plan 5 already established —
+        is_finance False/absent, is_forecasting still True."""
+        mlflow_uri = f"sqlite:///{tmp_path / 'mlflow.db'}"
+        mlflow.set_tracking_uri(mlflow_uri)
+        mlflow.set_experiment("test_finance_dispatch_forecasting_unaffected")
+
+        model_name = "test_forecast_gbm_model_unaffected_by_finance"
+        rng = np.random.default_rng(0)
+        X_train = pd.DataFrame({"lag_1h": rng.normal(size=20), "hour": rng.integers(0, 24, size=20)})
+        y_train = pd.Series(rng.normal(size=20))
+        import lightgbm as lgb
+        gbm_model = lgb.LGBMRegressor(n_estimators=5, max_depth=2).fit(X_train, y_train)
+
+        with mlflow.start_run():
+            mlflow.set_tags({"model_type": "gbm", "pipeline_type": "test_forecast"})
+            mlflow.log_metric("cv_mape_mean", 4.2)
+            mlflow.log_param("target_col", "PJME_MW")
+            mlflow.log_dict({"columns": ["lag_1h", "hour"]}, "feature_columns.json")
+            mlflow.lightgbm.log_model(gbm_model, name="model", registered_model_name=model_name)
+
+        client = mlflow.tracking.MlflowClient(tracking_uri=mlflow_uri)
+        version = client.get_latest_versions(model_name)[0]
+        client.transition_model_version_stage(name=model_name, version=version.version, stage="Production")
+
+        monkeypatch.setattr("src.serve.MLFLOW_TRACKING_URI", mlflow_uri)
+
+        result = _load_model(model_name)
+
+        assert result is not None
+        assert result["is_forecasting"] is True
+        assert result["forecast_model_type"] == "gbm"
+        assert not result.get("is_finance")
+        assert result.get("finance_model_type") is None
+
+    def test_tabular_model_unaffected_by_new_dispatch(self, tmp_path, monkeypatch):
+        """A run with neither cv_mape_mean nor train_error_std (every
+        existing tabular run) must load exactly as before — is_finance
+        False/absent, is_forecasting False/absent, model loaded via the
+        existing mlflow.pyfunc path."""
+        mlflow_uri = f"sqlite:///{tmp_path / 'mlflow.db'}"
+        mlflow.set_tracking_uri(mlflow_uri)
+        mlflow.set_experiment("test_finance_dispatch_tabular_unaffected")
+
+        model_name = "test_tabular_model_unaffected_by_finance"
+        rng = np.random.default_rng(0)
+        X_train = pd.DataFrame({"State": rng.normal(size=20), "Nurse communication": rng.normal(size=20)})
+        y_train = pd.Series(rng.normal(size=20))
+        from sklearn.linear_model import LinearRegression
+        sk_model = LinearRegression().fit(X_train, y_train)
+
+        with mlflow.start_run():
+            mlflow.log_param("target_col", "Excess Readmission Ratio")
+            mlflow.log_dict({"columns": ["State", "Nurse communication"]}, "feature_columns.json")
+            mlflow.sklearn.log_model(sk_model, name="model", registered_model_name=model_name)
+
+        client = mlflow.tracking.MlflowClient(tracking_uri=mlflow_uri)
+        version = client.get_latest_versions(model_name)[0]
+        client.transition_model_version_stage(name=model_name, version=version.version, stage="Production")
+
+        monkeypatch.setattr("src.serve.MLFLOW_TRACKING_URI", mlflow_uri)
+
+        result = _load_model(model_name)
+
+        assert result is not None
+        assert result.get("is_forecasting") is False
+        assert result.get("is_finance") is False
+        assert result.get("finance_model_type") is None
+        assert isinstance(result["model"], mlflow.pyfunc.PyFuncModel)
+
+
+class TestPredictFinanceReturnEndpoint:
+    def test_returns_400_when_no_finance_model_loaded(self, client, monkeypatch):
+        """GET /predict/finance-return against a tabular or forecasting
+        deployment must fail clearly with 400, not silently return
+        nonsense."""
+        _load(MagicMock(), feature_columns=SMALL_SCHEMA)  # tabular shape: is_finance stays False
+
+        response = client.get("/predict/finance-return", params={"horizon_months": 3})
+
+        assert response.status_code == 400
+        assert "not a finance model" in response.json()["detail"]
+
+    def test_returns_point_forecast_and_error_std_for_a_per_asset_model(self, monkeypatch):
+        """Monkeypatch _model_cache directly to a finance/mean shape (a
+        real reloaded MeanModel via Plan 4's reload_model, a ticker, a
+        test_error_std value), call GET /predict/finance-return?horizon_months=3,
+        assert 200, response.json()["prediction"] is the historical mean,
+        and response.json()["test_error_std"] matches what was set in the cache."""
+        import tempfile
+        from src.finance.model_registry import fit_mean
+
+        tmp_dir = tempfile.mkdtemp()
+        mlflow_uri = f"sqlite:///{tmp_dir}/mlflow.db"
+        mlflow.set_tracking_uri(mlflow_uri)
+        mlflow.set_experiment("test_predict_finance_return_mean")
+
+        y_train = pd.Series([0.01, 0.02, 0.03, 0.04])
+        fitted = fit_mean(y_train, {"window": None})
+        with mlflow.start_run() as run:
+            mlflow.pyfunc.log_model(python_model=fitted, name="model")
+            run_id = run.info.run_id
+
+        loaded = reload_model("mean", run_id, mlflow_uri)
+
+        _model_cache.update({
+            "model": loaded, "model_name": "test_mean_model", "model_version": "1", "model_stage": "Staging",
+            "is_finance": True, "finance_model_type": "mean", "ticker": "AAPL", "test_error_std": 0.05,
+        })
+
+        client = TestClient(app)
+        response = client.get("/predict/finance-return", params={"horizon_months": 3})
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["prediction"] == pytest.approx(0.025)
+        assert data["test_error_std"] == pytest.approx(0.05)
+
+    def test_returns_400_for_cross_sectional_gbm_without_serving_finance_ticker_env_var(self, monkeypatch):
+        """Monkeypatch _model_cache to a finance/cross_sectional_gbm shape
+        (finance_model_type="cross_sectional_gbm"), do NOT set
+        SERVING_FINANCE_TICKER, call the endpoint, assert 400 with a
+        message mentioning SERVING_FINANCE_TICKER."""
+        monkeypatch.setattr("src.serve.SERVING_FINANCE_TICKER", None)
+        _model_cache.update({
+            "model": MagicMock(), "model_name": "test_gbm_model", "model_version": "1", "model_stage": "Staging",
+            "is_finance": True, "finance_model_type": "cross_sectional_gbm",
+            "pipeline_type": "test_m6_returns_risk", "feature_columns": ["lag_1_return"],
+        })
+
+        client = TestClient(app)
+        response = client.get("/predict/finance-return", params={"horizon_months": 1})
+
+        assert response.status_code == 400
+        assert "SERVING_FINANCE_TICKER" in response.json()["detail"]
+
+    def test_returns_400_for_cross_sectional_gbm_with_horizon_months_greater_than_one(self, monkeypatch):
+        """Monkeypatch _model_cache to a finance/cross_sectional_gbm shape
+        and monkeypatch.setattr("src.serve.SERVING_FINANCE_TICKER", "AAPL"),
+        call GET /predict/finance-return?horizon_months=2, assert 400 with a
+        message mentioning horizon_months=1."""
+        monkeypatch.setattr("src.serve.SERVING_FINANCE_TICKER", "AAPL")
+        _model_cache.update({
+            "model": MagicMock(), "model_name": "test_gbm_model", "model_version": "1", "model_stage": "Staging",
+            "is_finance": True, "finance_model_type": "cross_sectional_gbm",
+            "pipeline_type": "test_m6_returns_risk", "feature_columns": ["lag_1_return"],
+        })
+
+        client = TestClient(app)
+        response = client.get("/predict/finance-return", params={"horizon_months": 2})
+
+        assert response.status_code == 400
+        assert "horizon_months=1" in response.json()["detail"]
+
+    def test_returns_point_forecast_for_cross_sectional_gbm_with_horizon_months_one(self, tmp_path, monkeypatch):
+        """Monkeypatch _model_cache to a finance/cross_sectional_gbm shape
+        with a real fitted LGBMRegressor (via
+        src.finance.model_registry.fit_cross_sectional_gbm) and a temp
+        features_dir containing a real train.parquet + manifest.yaml
+        (mirroring Task 1's TestLoadLatestAssetFeatures fixture shape),
+        monkeypatch.chdir(tmp_path) so config/<pipeline_type>/orchestration.yaml
+        resolves, monkeypatch.setattr("src.serve.SERVING_FINANCE_TICKER", "AAPL"),
+        call GET /predict/finance-return?horizon_months=1, assert 200 and a
+        real float prediction."""
+        import yaml
+        from src.finance.model_registry import fit_cross_sectional_gbm
+
+        feature_columns = ["lag_1_return", "trailing_12m_vol"]
+        target_col = "log_return"
+        panel_df = pd.DataFrame({
+            "log_return": [0.01, 0.02, 0.03, 0.04],
+            "lag_1_return": [0.0, 0.01, 0.02, 0.03],
+            "trailing_12m_vol": [0.05, 0.05, 0.06, 0.06],
+            "ticker_encoded": [0, 0, 1, 1],
+            "date_ordinal": [700, 701, 700, 701],
+        })
+        model = fit_cross_sectional_gbm(
+            panel_df, target_col, feature_columns, {"n_estimators": 5, "max_depth": 2, "random_state": 0},
+        )
+
+        pipeline_type = "test_m6_returns_risk"
+        features_dir = f"data/{pipeline_type}/features"
+        run_path = tmp_path / features_dir / "2026-09-23"
+        run_path.mkdir(parents=True)
+        panel_df.to_parquet(run_path / "train.parquet", index=False)
+        with open(run_path / "manifest.yaml", "w") as f:
+            yaml.dump({"ticker_mapping": {"AAPL": 0, "MSFT": 1}}, f)
+
+        config_dir = tmp_path / "config" / pipeline_type
+        config_dir.mkdir(parents=True)
+        (config_dir / "orchestration.yaml").write_text(f"directories:\n  features: {features_dir}\n")
+
+        monkeypatch.chdir(tmp_path)  # predict_finance_return resolves config/<pipeline_type>/orchestration.yaml relative to cwd
+        monkeypatch.setattr("src.serve.SERVING_FINANCE_TICKER", "AAPL")
+
+        _model_cache.update({
+            "model": model, "model_name": "test_gbm_model", "model_version": "1", "model_stage": "Staging",
+            "is_finance": True, "finance_model_type": "cross_sectional_gbm",
+            "pipeline_type": pipeline_type, "feature_columns": feature_columns,
+        })
+
+        client = TestClient(app)
+        response = client.get("/predict/finance-return", params={"horizon_months": 1})
+
+        assert response.status_code == 200
+        data = response.json()
+        assert isinstance(data["prediction"], float)
+        assert data["finance_model_type"] == "cross_sectional_gbm"

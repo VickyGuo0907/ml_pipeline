@@ -41,6 +41,8 @@ import pandas as pd
 from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel, Field, RootModel
 
+from src.finance.rank_ic import reload_model
+from src.finance.serve_finance import forecast_per_asset_model, load_latest_asset_features
 from src.forecasting.serve_forecast import forecast_with_gbm, forecast_with_statsmodels, load_latest_snapshot
 from src.utils.config import load_forecast_features_config, load_orchestration_config
 
@@ -48,6 +50,12 @@ logger = logging.getLogger(__name__)
 
 MLFLOW_TRACKING_URI = os.environ.get("MLFLOW_TRACKING_URI", "http://mlflow-server:5000")
 SERVING_MODEL_NAME = os.environ.get("SERVING_MODEL_NAME")
+# Only required for a cross_sectional_gbm finance deployment — that model
+# isn't tied to one asset by training (unlike random_walk/mean/arima, whose
+# asset is already fixed by which registered model name SERVING_MODEL_NAME
+# points at), so this server needs to be told which asset's latest realized
+# features to use.
+SERVING_FINANCE_TICKER = os.environ.get("SERVING_FINANCE_TICKER")
 
 FEATURE_COLUMNS_ARTIFACT = "feature_columns.json"
 
@@ -72,6 +80,12 @@ _model_cache: dict[str, Any] = {
     "rolling_windows": None,
     "calendar_features": None,
     "holiday_features": None,
+    # Finance-specific — False/None for every tabular and forecasting
+    # model. Populated only when _load_model detects train_error_std.
+    "is_finance": False,
+    "finance_model_type": None,
+    "ticker": None,
+    "test_error_std": None,
 }
 
 
@@ -141,6 +155,16 @@ def _load_model(model_name: str) -> dict[str, Any] | None:
             calendar_features: bool | None = None
             holiday_features: bool | None = None
 
+            # A train_error_std metric is logged only by the finance
+            # training stage (src/finance/train_finance.py) — never by the
+            # tabular or forecasting ones. Mutually exclusive with
+            # is_forecasting's cv_mape_mean check by construction (verified:
+            # neither pipeline family logs the other's metric name).
+            is_finance = "train_error_std" in run.data.metrics
+            finance_model_type: str | None = None
+            ticker: str | None = None
+            test_error_std: float | None = None
+
             if is_forecasting:
                 forecast_model_type = run.data.tags.get("model_type")
                 pipeline_type = run.data.tags.get("pipeline_type")
@@ -165,13 +189,28 @@ def _load_model(model_name: str) -> dict[str, Any] | None:
                         logger.warning(
                             "Could not load forecast feature config for pipeline '%s': %s", pipeline_type, e,
                         )
+            elif is_finance:
+                finance_model_type = run.data.tags.get("model_type")
+                ticker = run.data.tags.get("ticker")  # None for cross_sectional_gbm
+                pipeline_type = run.data.tags.get("pipeline_type")
+                if finance_model_type not in ("random_walk", "mean", "arima", "cross_sectional_gbm"):
+                    logger.warning(
+                        "Unknown finance model_type '%s' for %s v%s — cannot select "
+                        "an MLflow flavor to load it with.", finance_model_type, model_name, version.version,
+                    )
+                    continue
+                model = reload_model(finance_model_type, version.run_id, MLFLOW_TRACKING_URI)
+                test_error_std_str = version.tags.get("test_error_std")
+                if test_error_std_str is not None:
+                    test_error_std = float(test_error_std_str)
             else:
                 model = mlflow.pyfunc.load_model(model_uri)
 
             logger.info(
-                "Loaded %s v%s from %s (target_col=%s, %s features, is_forecasting=%s, boxcox_lambda=%s)",
+                "Loaded %s v%s from %s (target_col=%s, %s features, is_forecasting=%s, is_finance=%s, "
+                "boxcox_lambda=%s)",
                 model_name, version.version, stage, target_col,
-                len(feature_columns) if feature_columns else "unknown", is_forecasting, boxcox_lambda,
+                len(feature_columns) if feature_columns else "unknown", is_forecasting, is_finance, boxcox_lambda,
             )
             return {
                 "model": model,
@@ -189,6 +228,10 @@ def _load_model(model_name: str) -> dict[str, Any] | None:
                 "rolling_windows": rolling_windows,
                 "calendar_features": calendar_features,
                 "holiday_features": holiday_features,
+                "is_finance": is_finance,
+                "finance_model_type": finance_model_type,
+                "ticker": ticker,
+                "test_error_std": test_error_std,
             }
         except Exception as e:
             logger.debug("No %s model for %s: %s", stage, model_name, e)
@@ -317,6 +360,22 @@ class ForecastOutput(BaseModel):
     model_version: str
     model_stage: str
     forecast_model_type: str
+
+
+class FinanceForecastOutput(BaseModel):
+    """Point forecast for one asset's log-return horizon_months out, plus
+    the model's logged test-period forecast-error std-dev."""
+
+    prediction: float = Field(..., description="Predicted log-return at horizon_months out")
+    horizon_months: int
+    ticker: Optional[str] = Field(None, description="Asset this forecast is for")
+    test_error_std: Optional[float] = Field(
+        None, description="Model's logged test-period forecast-error std-dev — how certain is this model?",
+    )
+    model_name: str
+    model_version: str
+    model_stage: str
+    finance_model_type: str
 
 
 @app.get("/health", response_model=HealthResponse)
@@ -481,4 +540,96 @@ async def predict_forecast(
         model_version=str(_model_cache["model_version"]),
         model_stage=_model_cache["model_stage"],
         forecast_model_type=forecast_model_type,
+    )
+
+
+MAX_FINANCE_HORIZON_MONTHS = 24  # 2 years — a sane upper bound on a single request
+
+
+@app.get("/predict/finance-return", response_model=FinanceForecastOutput)
+async def predict_finance_return(
+    horizon_months: int = Query(..., gt=0, le=MAX_FINANCE_HORIZON_MONTHS),
+) -> FinanceForecastOutput:
+    """Point forecast of the log-return horizon_months out, using whichever
+    finance model SERVING_MODEL_NAME points at, plus that model's logged
+    test-period forecast-error std-dev (the risk-analysis "how certain is
+    your model?" figure). Returns 400 if the currently loaded model is not
+    a finance model.
+
+    cross_sectional_gbm deployments require SERVING_FINANCE_TICKER to be
+    set and only support horizon_months=1 — see this module's SERVING_FINANCE_TICKER
+    comment and this plan's Global Constraints for why.
+    """
+    if not _model_cache.get("is_finance"):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Loaded model '{SERVING_MODEL_NAME}' is not a finance model. "
+                "Use POST /predict for tabular models or GET /predict/forecast for forecasting models."
+            ),
+        )
+    if _model_cache.get("model") is None:
+        raise HTTPException(status_code=503, detail=f"No model loaded for '{SERVING_MODEL_NAME}'.")
+
+    finance_model_type = _model_cache["finance_model_type"]
+    try:
+        if finance_model_type in ("random_walk", "mean", "arima"):
+            predictions = forecast_per_asset_model(_model_cache["model"], finance_model_type, horizon_months)
+            prediction = float(predictions[-1])
+        elif finance_model_type == "cross_sectional_gbm":
+            if not SERVING_FINANCE_TICKER:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        "SERVING_FINANCE_TICKER environment variable is not set — a "
+                        "cross_sectional_gbm deployment isn't tied to one asset by "
+                        "training, so this server needs to be told which asset's "
+                        "features to use."
+                    ),
+                )
+            if horizon_months != 1:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        "cross_sectional_gbm serving only supports horizon_months=1 "
+                        "in this pipeline — it predicts from the latest known "
+                        "realized feature values and has no recursive multi-step "
+                        "path. Request horizon_months=1."
+                    ),
+                )
+            pipeline_type = _model_cache.get("pipeline_type")
+            feature_columns = _model_cache.get("feature_columns")
+            features_dir = (
+                load_orchestration_config(f"config/{pipeline_type}").directories.features if pipeline_type else None
+            )
+            feature_row = (
+                load_latest_asset_features(features_dir, SERVING_FINANCE_TICKER, feature_columns)
+                if features_dir and feature_columns else None
+            )
+            if feature_row is None:
+                raise HTTPException(
+                    status_code=503,
+                    detail=(
+                        f"No feature data available yet for '{SERVING_FINANCE_TICKER}' — "
+                        "run the pipeline's DAG at least once."
+                    ),
+                )
+            prediction = float(_model_cache["model"].predict(feature_row)[0])
+        else:
+            raise HTTPException(status_code=500, detail=f"Unknown finance model type '{finance_model_type}'.")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Finance forecast failed: %s", e)
+        raise HTTPException(status_code=500, detail=f"Finance forecast failed: {str(e)}")
+
+    return FinanceForecastOutput(
+        prediction=prediction,
+        horizon_months=horizon_months,
+        ticker=_model_cache.get("ticker") or SERVING_FINANCE_TICKER,
+        test_error_std=_model_cache.get("test_error_std"),
+        model_name=_model_cache["model_name"],
+        model_version=str(_model_cache["model_version"]),
+        model_stage=_model_cache["model_stage"],
+        finance_model_type=finance_model_type,
     )
