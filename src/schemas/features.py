@@ -50,3 +50,30 @@ def build_forecast_features_schema(target_col: str) -> DataFrameSchema:
         strict=False,
         coerce=False,
     )
+
+
+def build_finance_features_schema(target_col: str) -> DataFrameSchema:
+    """Build a feature validation schema for a finance pipeline's feature matrix.
+
+    Unlike build_forecast_features_schema's DatetimeIndex requirement, a
+    finance feature matrix is long-format (one row per (Date, Ticker) pair —
+    many rows share the same Date across different assets), so a plain
+    integer row index is the correct shape here, same as the tabular schema.
+    A distinct function (rather than reusing build_features_schema directly)
+    keeps room to add finance-specific column checks (e.g. a required Ticker
+    column) later without touching the tabular schema's contract.
+
+    Args:
+        target_col: Target column name from pipeline.yaml (e.g. 'log_return').
+
+    Returns:
+        DataFrameSchema that checks the target is a nullable float; strict=False
+        allows any additional predictor columns (Ticker, lag/volatility
+        features) without listing them explicitly.
+    """
+    return DataFrameSchema(
+        columns={target_col: Column(float, nullable=True)},
+        index=Index(int, nullable=False),
+        strict=False,
+        coerce=True,
+    )

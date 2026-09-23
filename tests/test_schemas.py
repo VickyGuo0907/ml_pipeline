@@ -4,7 +4,7 @@ import pandas as pd
 import pytest
 from pandera.errors import SchemaError
 
-from src.schemas.features import build_features_schema, build_forecast_features_schema
+from src.schemas.features import build_features_schema, build_finance_features_schema, build_forecast_features_schema
 
 # Use the same target column as pipeline.yaml for schema tests
 features_schema = build_features_schema("Excess Readmission Ratio")
@@ -79,5 +79,29 @@ class TestForecastFeaturesSchema:
         """A plain integer index is rejected - forecasting matrices must carry a DatetimeIndex."""
         schema = build_forecast_features_schema("PJME_MW")
         df = pd.DataFrame({"PJME_MW": [30000.0, 31000.0]})
+        with pytest.raises(SchemaError):
+            schema.validate(df)
+
+
+class TestFinanceFeaturesSchema:
+    """Tests for the finance feature matrix schema (long-format panel, plain
+    integer index — unlike the forecasting schema's DatetimeIndex, since many
+    rows share the same Date across different assets)."""
+
+    def test_valid_finance_feature_matrix(self):
+        """A plain-integer-indexed long-format matrix with a numeric target passes validation."""
+        schema = build_finance_features_schema("log_return")
+        df = pd.DataFrame({
+            "log_return": [0.01, -0.02, 0.03],
+            "Ticker": ["AAPL", "MSFT", "AAPL"],
+            "lag_1_return": [0.02, -0.01, 0.01],
+        })
+        validated = schema.validate(df)
+        assert len(validated) == 3
+
+    def test_finance_feature_matrix_missing_target(self):
+        """Missing target column raises SchemaError."""
+        schema = build_finance_features_schema("log_return")
+        df = pd.DataFrame({"Ticker": ["AAPL", "MSFT"]})
         with pytest.raises(SchemaError):
             schema.validate(df)
