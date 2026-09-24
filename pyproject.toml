@@ -43,6 +43,7 @@ dependencies = [
     # Utilities
     "setuptools>=70.0,<72",
     "pandas-stubs~=2.1.4",
+    "yfinance>=1.7.0",
 ]
 
 [project.optional-dependencies]
