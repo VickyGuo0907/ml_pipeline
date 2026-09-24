@@ -55,11 +55,20 @@ def stage_landing(tickers: list[str], years: int, dest: Path) -> dict[str, Any]:
     else:
         close = raw[["Close"]].rename(columns={"Close": tickers[0]})
 
+    today = pd.Timestamp.today()
+    current_month_start = pd.Timestamp(year=today.year, month=today.month, day=1)
+
     rows = []
     for ticker in tickers:
         if ticker not in close.columns:
             continue
         prices = close[ticker].dropna()
+        if len(prices) and prices.index[-1] >= current_month_start:
+            # yfinance's monthly bar for the in-progress month is a partial
+            # close (latest trade, not a real month-end close) — drop it so
+            # this script's output for a given completed month is stable
+            # regardless of which day of the current month the script runs.
+            prices = prices.iloc[:-1]
         if len(prices) < 2:
             continue
         log_returns = np.log(prices / prices.shift(1)).dropna()

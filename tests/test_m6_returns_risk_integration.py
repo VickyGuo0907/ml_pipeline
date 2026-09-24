@@ -196,9 +196,12 @@ class TestM6ReturnsRiskIntegration:
         loaded = serve_module._load_model(per_asset_name)
         assert loaded is not None
         serve_module._model_cache.update(loaded)
-        assert serve_module._model_cache["is_finance"] is True
+        try:
+            assert serve_module._model_cache["is_finance"] is True
 
-        client = TestClient(serve_module.app)
-        response = client.get("/predict/finance-return", params={"horizon_months": 2})
-        assert response.status_code == 200
-        assert isinstance(response.json()["prediction"], float)
+            client = TestClient(serve_module.app)
+            response = client.get("/predict/finance-return", params={"horizon_months": 2})
+            assert response.status_code == 200
+            assert isinstance(response.json()["prediction"], float)
+        finally:
+            serve_module._model_cache.clear()
