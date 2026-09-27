@@ -46,7 +46,15 @@ def stage_landing(tickers: list[str], years: int, dest: Path) -> dict[str, Any]:
     Raises:
         ValueError: If yfinance returns no usable data for any ticker.
     """
-    raw = yf.download(tickers, period=f"{years}y", interval="1mo", progress=False, auto_adjust=True)
+    # threads=False: yfinance's default threaded downloader has each worker
+    # thread write to a shared local sqlite cookie/crumb cache with no lock
+    # retry, which intermittently raises "database is locked" under CI's
+    # tighter scheduling (see yfinance issue reports on concurrent
+    # yf.download calls). Sequential fetching for our ~15-ticker panel costs
+    # a couple seconds and removes the flake entirely.
+    raw = yf.download(
+        tickers, period=f"{years}y", interval="1mo", progress=False, auto_adjust=True, threads=False
+    )
     if raw.empty:
         raise ValueError(f"yfinance returned no data for tickers={tickers}, period={years}y")
 
