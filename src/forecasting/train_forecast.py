@@ -1,5 +1,5 @@
-"""Training stage for time-series forecasting pipelines: trains ETS,
-SARIMAX, and GBM-lagged models, each scored via rolling-origin
+"""Training stage for time-series forecasting pipelines: scores a seasonal
+naive benchmark and trains ETS, SARIMAX, and GBM-lagged models, each scored via rolling-origin
 cross-validation (average MAPE across n_windows origins sampled from the
 training set), and logs each to MLflow.
 
@@ -21,7 +21,13 @@ import numpy as np
 import pandas as pd
 
 from src.forecasting.model_registry import fit_ets, fit_sarimax
-from src.forecasting.rolling_origin import score_gbm_origins, score_statsmodels_origins, select_cv_origins
+from src.forecasting.rolling_origin import (
+    score_gbm_origins,
+    score_seasonal_naive_origins,
+    score_statsmodels_origins,
+    select_cv_origins,
+)
+from src.forecasting.weather import is_weather_column
 from src.utils.config import load_forecast_features_config, load_forecast_models_config, load_pipeline_config
 from src.utils.diagnostics import feature_importance
 from src.utils.io import resolve_run_path
@@ -84,13 +90,28 @@ def train_forecast_models(
                     "run_id": run_id,
                     "pipeline_type": pipeline_config.pipeline_type,
                 })
-                mlflow.log_param("feature_count", len(feature_columns))
+                # Per-model feature set: a gbm with use_weather: false drops the
+                # wx_ columns, giving a same-run with/without-weather ablation.
+                hyperparameters = dict(model_cfg.hyperparameters)
+                use_weather = bool(hyperparameters.pop("use_weather", True))
+                model_features = [
+                    c for c in feature_columns if use_weather or not is_weather_column(c)
+                ]
+                mlflow.log_param("feature_count", len(model_features))
                 mlflow.log_param("target_col", target_col)
                 mlflow.log_param("horizon_hours", eval_cfg.horizon_hours)
                 mlflow.log_param("n_windows", len(origins))
-                mlflow.log_dict({"columns": feature_columns}, "feature_columns.json")
+                mlflow.log_dict({"columns": model_features}, "feature_columns.json")
 
-                if model_cfg.type == "ets":
+                if model_cfg.type == "seasonal_naive":
+                    season_length = int(hyperparameters.get("season_length", 168))
+                    mlflow.log_param("season_length", season_length)
+                    window_scores = score_seasonal_naive_origins(
+                        y_train, origins, eval_cfg.horizon_hours, season_length,
+                    )
+                    # A benchmark, not a deployable model: no artifact is logged,
+                    # and the evaluate stage scores it but never registers it.
+                elif model_cfg.type == "ets":
                     fitted = fit_ets(y_train, model_cfg.hyperparameters)
                     window_scores = score_statsmodels_origins(fitted, y_train, origins, eval_cfg.horizon_hours)
                     mlflow.statsmodels.log_model(fitted, name="model")
@@ -127,10 +148,11 @@ def train_forecast_models(
                     window_scores = score_statsmodels_origins(fitted, sarimax_y, sarimax_origins, eval_cfg.horizon_hours)
                     mlflow.statsmodels.log_model(fitted, name="model")
                 elif model_cfg.type == "gbm":
-                    model = get_model("gbm", model_cfg.hyperparameters)
-                    model.fit(X_train, y_train)
+                    mlflow.log_param("use_weather", use_weather)
+                    model = get_model("gbm", hyperparameters)
+                    model.fit(X_train[model_features], y_train)
                     window_scores = score_gbm_origins(
-                        model, train_df, target_col, feature_columns, origins, eval_cfg.horizon_hours,
+                        model, train_df, target_col, model_features, origins, eval_cfg.horizon_hours,
                         features_config.lags, features_config.rolling_windows,
                         features_config.calendar_features, features_config.holiday_features,
                     )
@@ -144,13 +166,13 @@ def train_forecast_models(
                     # the tabular pipeline's optional feature_importance block has
                     # one, since GBM is the only forecasting model type where this
                     # attribute exists at all (ETS/SARIMAX have no equivalent).
-                    importance = feature_importance(model, feature_columns)
+                    importance = feature_importance(model, model_features)
                     if importance:
                         mlflow.log_dict(importance, "feature_importance.json")
                 else:
                     raise ValueError(
                         f"Unknown forecasting model type '{model_cfg.type}'. "
-                        f"Expected one of: ets, sarimax, gbm."
+                        f"Expected one of: seasonal_naive, ets, sarimax, gbm."
                     )
 
                 if not window_scores:

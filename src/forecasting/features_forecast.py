@@ -10,6 +10,7 @@ import numpy as np
 import pandas as pd
 from pandas.tseries.holiday import USFederalHolidayCalendar
 
+from src.forecasting.weather import RAW_WEATHER_COLUMNS, build_weather_features, weather_columns
 from src.utils.config import load_forecast_features_config, load_pipeline_config
 from src.utils.io import load_manifest, resolve_run_path, write_manifest
 
@@ -98,6 +99,23 @@ def engineer_forecast_features(
             int(np.abs(holiday_arr - ts).min() / np.timedelta64(1, "D")) if len(holiday_arr) else np.nan
             for ts in normalized.values
         ]
+
+    raw_wx = weather_columns(feature_df.columns)
+    wx_cfg = features_config.weather_features
+    if wx_cfg is not None and wx_cfg.enabled:
+        missing = [c for c in RAW_WEATHER_COLUMNS.values() if c not in raw_wx]
+        if missing:
+            raise ValueError(
+                f"features.yaml enables weather_features but the cleaned data has no {missing} "
+                f"columns. Add a weather block to cleaning.yaml and stage the weather landing file."
+            )
+        derived = build_weather_features(feature_df[raw_wx], wx_cfg)
+        for col in derived.columns:
+            feature_df[col] = derived[col]
+    elif raw_wx:
+        # Weather was joined at clean time but features are switched off:
+        # drop the columns so they can't silently leak into the model.
+        feature_df = feature_df.drop(columns=raw_wx)
 
     rows_before_dropna = len(feature_df)
     feature_df = feature_df.dropna()

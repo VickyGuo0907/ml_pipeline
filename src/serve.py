@@ -489,6 +489,17 @@ async def predict(data: PredictionInput) -> PredictionOutput:
 MAX_FORECAST_HORIZON_HOURS = 168  # 1 week — a sane upper bound on a single request
 
 
+def _require_no_weather_features(feature_columns: list[str] | None) -> None:
+    """Reject forecasting with a weather (wx_) model: serving has no weather
+    forecast feed yet, so it can't supply the future weather such a model needs."""
+    if any(c.startswith("wx_") for c in (feature_columns or [])):
+        raise HTTPException(
+            status_code=501,
+            detail="This model needs future weather (wx_ features); live serving has no "
+                   "weather forecast feed yet. Promote the no-weather GBM to serve forecasts.",
+        )
+
+
 @app.get("/predict/forecast", response_model=ForecastOutput)
 async def predict_forecast(
     horizon_hours: int = Query(..., gt=0, le=MAX_FORECAST_HORIZON_HOURS),
@@ -535,6 +546,7 @@ async def predict_forecast(
                     status_code=503,
                     detail="No feature snapshot available yet — run the pipeline's DAG at least once.",
                 )
+            _require_no_weather_features(_model_cache["feature_columns"])
             series = forecast_with_gbm(
                 _model_cache["model"], snapshot, _model_cache["target_col"], _model_cache["feature_columns"],
                 horizon_hours, _model_cache["lags"], _model_cache["rolling_windows"],

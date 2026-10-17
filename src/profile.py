@@ -15,7 +15,8 @@ from statsmodels.tsa.seasonal import MSTL
 from statsmodels.tsa.stattools import adfuller
 from ydata_profiling import ProfileReport
 
-from src.utils.config import load_pipeline_config
+from src.forecasting.weather import split_raw_files
+from src.utils.config import load_forecast_cleaning_config, load_pipeline_config
 from src.utils.io import READERS, load_manifest, resolve_run_path
 
 logger = logging.getLogger(__name__)
@@ -154,12 +155,14 @@ def generate_mstl_report(
     manifest = load_manifest(raw_path)  # raises FileNotFoundError if absent
 
     files = list(manifest.get("files", {}))
-    if len(files) != 1:
-        raise ValueError(
-            f"Expected exactly one raw file for a forecasting pipeline, found "
-            f"{len(files)}: {files}"
-        )
-    filename = files[0]
+    # cleaning.yaml is optional for this diagnostic-only stage.
+    weather_cfg = (
+        load_forecast_cleaning_config(config_dir).weather
+        if (Path(config_dir) / "cleaning.yaml").exists() else None
+    )
+    # MSTL decomposes the target series only; a configured weather companion
+    # file is routed out here and profiled by profile_raw_files like any other.
+    filename, _ = split_raw_files(files, weather_cfg.file_pattern if weather_cfg else None)
     reader = READERS.get(Path(filename).suffix.lower())
     if reader is None:
         raise ValueError(f"Unsupported file format: {filename}")

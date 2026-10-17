@@ -35,7 +35,12 @@ import mlflow.statsmodels
 import pandas as pd
 
 from src.evaluate import _write_evaluation_report
-from src.forecasting.rolling_origin import score_gbm_origins, score_statsmodels_origins, select_cv_origins
+from src.forecasting.rolling_origin import (
+    score_gbm_origins,
+    score_seasonal_naive_origins,
+    score_statsmodels_origins,
+    select_cv_origins,
+)
 from src.utils.config import load_forecast_features_config, load_forecast_models_config, load_pipeline_config
 from src.utils.io import resolve_run_path
 
@@ -120,7 +125,6 @@ def register_forecast_models_to_mlflow(
     test_df = pd.read_parquet(features_path / "test.parquet")
     full_df = pd.concat([train_df, test_df]).sort_index()
     full_y = full_df[target_col]
-    feature_columns = [c for c in train_df.columns if c != target_col]
 
     origins = select_cv_origins(test_df.index, eval_cfg.n_windows, eval_cfg.horizon_hours)
 
@@ -141,6 +145,31 @@ def register_forecast_models_to_mlflow(
             pipeline_type = run_tags.get("pipeline_type", "unknown")
             cv_mape_mean = metrics.get("cv_mape_mean")
 
+            if model_type == "seasonal_naive":
+                # Benchmark only: scored on the same test origins for the
+                # report, never registered and never eligible as champion.
+                season_length = int(run.data.params.get("season_length", 168))
+                window_scores = score_seasonal_naive_origins(
+                    full_y, origins, eval_cfg.horizon_hours, season_length,
+                )
+                if not window_scores:
+                    raise ValueError(f"No scorable rolling-origin windows on the test set for {model_name}.")
+                report["models"][model_name] = {
+                    "status": "baseline",
+                    "test_mape_mean": float(pd.Series(window_scores).mean()),
+                    "test_mape_std": float(pd.Series(window_scores).std()),
+                    "cv_mape_mean": cv_mape_mean,
+                    "n_windows_scored": len(window_scores),
+                }
+                registration_results["registered_models"][model_name] = {
+                    "status": "baseline", "source_run_id": mlflow_run_id,
+                }
+                logger.info(
+                    "Baseline %s scored (not registered): test_mape_mean=%.2f%%",
+                    model_name, report["models"][model_name]["test_mape_mean"],
+                )
+                continue
+
             model_uri = f"runs:/{mlflow_run_id}/model"
             if model_type in ("ets", "sarimax"):
                 loaded = mlflow.statsmodels.load_model(model_uri)
@@ -156,8 +185,13 @@ def register_forecast_models_to_mlflow(
                 )
             elif model_type == "gbm":
                 loaded = mlflow.lightgbm.load_model(model_uri)
+                # Each gbm logs its own column list (a no-weather ablation
+                # uses a subset of the feature matrix's columns).
+                model_columns = mlflow.artifacts.load_dict(
+                    f"runs:/{mlflow_run_id}/feature_columns.json"
+                )["columns"]
                 window_scores = score_gbm_origins(
-                    loaded, full_df, target_col, feature_columns, origins, eval_cfg.horizon_hours,
+                    loaded, full_df, target_col, model_columns, origins, eval_cfg.horizon_hours,
                     features_cfg.lags, features_cfg.rolling_windows,
                     features_cfg.calendar_features, features_cfg.holiday_features,
                 )

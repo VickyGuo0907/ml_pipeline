@@ -3,3 +3,19 @@
 # since a multi-day outage smoothed away would corrupt weeks of lag features.
 max_gap_hours: 6
 fill_strategy: "interpolate"
+
+# Hourly weather joined onto the load series as wx_ columns. Regional load is
+# HVAC-driven, so temperature/humidity/wind explain most of what lags can't
+# (heat waves, cold snaps). Staged by scripts/stage_pjm_load_forecast_landing.py
+# (Open-Meteo, no API key) into the landing zone as weather_hourly.csv.
+# One airport per PJME metro; equal weights by default - raise a weight to
+# lean the regional average toward a bigger load center. Remove this block to
+# run the pipeline on load history alone.
+weather:
+  file_pattern: "weather_hourly"
+  max_gap_hours: 6
+  stations:
+    - {name: "PHL", latitude: 39.8721, longitude: -75.2411, weight: 1.0}   # Philadelphia (PECO)
+    - {name: "EWR", latitude: 40.6925, longitude: -74.1687, weight: 1.0}   # Newark (PSE&G / JCP&L)
+    - {name: "BWI", latitude: 39.1754, longitude: -76.6683, weight: 1.0}   # Baltimore (BGE)
+    - {name: "DCA", latitude: 38.8512, longitude: -77.0402, weight: 1.0}   # Washington DC (Pepco)

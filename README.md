@@ -185,10 +185,19 @@ new template layer:
   `ForecastEvaluationConfig` (in `src/utils/config.py`, re-exported from `src.utils`) replace the
   tabular `CleaningConfig`/`FeaturesConfig`/`ModelsConfig`/`EvaluationConfig` for this pipeline's
   `cleaning.yaml`/`features.yaml`/`models.yaml` — same file names, different schema.
-- **Models:** ETS and SARIMAX (`statsmodels`, fit once, scored via rolling-origin cross-validation)
-  plus a LightGBM model trained on engineered lag/rolling/calendar/holiday features and scored via
-  recursive multi-step forecasting — all three compared on MAPE, and the run champion is whichever
-  has the lowest cross-validated MAPE.
+- **Models:** a seasonal naive benchmark (same hour last week; scored, never registered), ETS
+  (`statsmodels`, fit once, scored via rolling-origin cross-validation), and LightGBM trained on
+  engineered lag/rolling/calendar/holiday features plus optional hourly weather (`wx_` features),
+  scored via recursive multi-step forecasting. A second LightGBM without weather runs alongside as an
+  ablation. All are compared on MAPE over the same rolling-origin windows, and the run champion is
+  the registered model with the lowest cross-validated MAPE. SARIMAX is still supported by the code
+  but dropped from the default config (memory-hungry on hourly data, never competitive).
+- **Weather (optional):** a `weather` block in `cleaning.yaml` makes the clean stage expect a second
+  raw file (`weather_hourly.csv`), aggregate its stations into a weighted regional series, and join
+  it as `wx_` columns; `weather_features` in `features.yaml` derives cooling/heating degree hours,
+  heat index, wind chill and trailing temperature means (`src/forecasting/weather.py`). Weather
+  values for future hours are treated as known (observed weather standing in for a perfect weather
+  forecast), so weather-model scores are an upper bound on production accuracy.
 - **`unsupervised_explore` and `drift_report` are disabled** for this pipeline
   (`config/pjm_load_forecast/orchestration.yaml`): PCA/k-means don't apply to a single univariate
   series, and forecasting drift comparison isn't implemented.
@@ -368,25 +377,36 @@ for how the DAG dispatches to a parallel set of stage functions for this `proble
   zone, 2002-2018. Not committed to the repo (download it yourself and place it in the landing
   zone below).
 - **Target:** `PJME_MW` (continuous, always positive).
-- **Models:** ETS and SARIMAX (`statsmodels`) plus a LightGBM model on lag/rolling/calendar/holiday
-  features (`config/pjm_load_forecast/models.yaml`) — see
+- **Weather:** hourly temperature, dew point, humidity and wind for PHL, EWR, BWI and DCA from the
+  [Open-Meteo Historical Weather API](https://open-meteo.com/en/docs/historical-weather-api) (free,
+  no key), staged by `scripts/stage_pjm_load_forecast_landing.py`.
+- **Models:** seasonal naive benchmark, ETS, LightGBM with weather, and LightGBM without weather
+  (`config/pjm_load_forecast/models.yaml`) — see
   [Forecasting Pipelines](#forecasting-pipelines) above.
 
 **Setup and running the pipeline end-to-end:**
 
 1. Download `PJME_hourly.csv` from the Kaggle link above and place it at
    `data/pjm_load_forecast/landing/PJME_hourly.csv`.
-2. Trigger `pjm_load_forecast_pipeline` in the Airflow UI (http://localhost:8080), same as any
+2. Stage the weather companion file (one-off, ~70 API calls, a couple of minutes):
+   ```bash
+   uv run python -m scripts.stage_pjm_load_forecast_landing
+   ```
+   This writes `data/pjm_load_forecast/landing/weather_hourly.csv`. To run without weather instead,
+   delete the `weather` block from `cleaning.yaml` and `weather_features` from `features.yaml`.
+3. Trigger `pjm_load_forecast_pipeline` in the Airflow UI (http://localhost:8080), same as any
    other pipeline — see [Running the DAG](#running-the-dag).
-3. Check training results in MLflow (http://localhost:5001): each run logs three models
-   (`pjm_load_forecast_ets`, `pjm_load_forecast_sarimax`, `pjm_load_forecast_gbm`), each with
+4. Check training results in MLflow (http://localhost:5001): each run logs four models
+   (`pjm_load_forecast_seasonal_naive`, `pjm_load_forecast_ets`, `pjm_load_forecast_gbm`,
+   `pjm_load_forecast_gbm_no_weather`), each with
    `cv_mape_mean`/`cv_mape_std` (training-set rolling-origin CV) and, after the register stage,
    `test_mape_mean` (held-out test-set scoring) as a model-version tag. The run champion (lowest
    `cv_mape`) is tagged `run_champion: true` on its registered version, mirroring the tabular
-   pipelines' champion/challenger tagging.
-4. Promote a model version to Production in the MLflow UI (manual click, same as every other
+   pipelines' champion/challenger tagging. The seasonal naive benchmark appears in the evaluation
+   report with `status: baseline` (scored for comparison, not registered).
+5. Promote a model version to Production in the MLflow UI (manual click, same as every other
    pipeline — no auto-promotion).
-5. Set `SERVING_MODEL_NAME` to the promoted model's full name (e.g. `pjm_load_forecast_gbm`) and
+6. Set `SERVING_MODEL_NAME` to the promoted model's full name (e.g. `pjm_load_forecast_gbm_no_weather`) and
    restart the `fastapi` container, then call the live forecasting endpoint:
    ```bash
    curl "http://localhost:8000/predict/forecast?horizon_hours=24"
@@ -395,7 +415,8 @@ for how the DAG dispatches to a parallel set of stage functions for this `proble
    168 (one week), but each model's cross-validated accuracy evidence only covers
    `config/pjm_load_forecast/models.yaml`'s `evaluation.horizon_hours` (24 by default) — a request
    beyond that horizon still returns a forecast, just one increasingly extrapolated past the
-   horizon the model was actually validated on.
+   horizon the model was actually validated on. A model trained with weather returns HTTP 501:
+   serving has no weather forecast feed yet, so serve the no-weather GBM.
 
 **Known limitation — MSTL report runtime at full dataset scale:** the `profile` task's MSTL
 seasonal decomposition report (`generate_mstl_report`, daily + weekly +, for a long enough

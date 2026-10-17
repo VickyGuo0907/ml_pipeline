@@ -424,7 +424,13 @@ def test_load_pjm_forecast_recipe_configs():
     assert cleaning.max_gap_hours >= 1
     assert features.lags
     model_types = {m.type for m in models.models}
-    assert model_types == {"ets", "sarimax", "gbm"}
+    assert model_types == {"seasonal_naive", "ets", "gbm"}
+    # Weather: four PJME metro stations, weather features on, and a
+    # no-weather GBM ablation alongside the weather GBM.
+    assert {st.name for st in cleaning.weather.stations} == {"PHL", "EWR", "BWI", "DCA"}
+    assert features.weather_features.enabled
+    gbm_weather_flags = [m.hyperparameters.get("use_weather", True) for m in models.models if m.type == "gbm"]
+    assert sorted(gbm_weather_flags) == [False, True]
 
 
 def test_load_pjm_forecast_orchestration_config():

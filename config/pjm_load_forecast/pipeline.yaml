@@ -43,6 +43,26 @@ validation:
           min: 0.0
           max: 120000.0   # PJM's historical hourly peak is well under 120,000 MW
       min_rows: 1000
+    # Companion weather file (scripts/stage_pjm_load_forecast_landing.py).
+    - file_pattern: "weather_hourly"
+      required_columns:
+        - "Datetime"
+        - "station"
+        - "temp_f"
+        - "dewpoint_f"
+        - "rel_humidity"
+        - "wind_mph"
+      numeric_bounds:
+        "temp_f":
+          min: -40.0
+          max: 130.0
+        "rel_humidity":
+          min: 0.0
+          max: 100.0
+        "wind_mph":
+          min: 0.0
+          max: 150.0
+      min_rows: 1000
 
 profiling:
   minimal: false

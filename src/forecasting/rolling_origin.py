@@ -32,6 +32,7 @@ import numpy as np
 import pandas as pd
 
 from src.forecasting.recursive import recursive_forecast
+from src.forecasting.weather import weather_columns
 
 
 def mape(actual: pd.Series, predicted: pd.Series) -> float:
@@ -191,6 +192,10 @@ def score_gbm_origins(
     """
     scores = []
     y = df[target_col]
+    # Weather (wx_) features are known-in-advance exogenous inputs: passed
+    # through from df for the forecast window instead of rebuilt recursively.
+    wx_cols = weather_columns(feature_columns)
+    exog = df[wx_cols] if wx_cols else None
     for origin in origins:
         end = origin + pd.Timedelta(hours=horizon_hours - 1)
         if end > y.index[-1]:
@@ -201,7 +206,47 @@ def score_gbm_origins(
         pred = recursive_forecast(
             model, history, horizon_hours, feature_columns,
             lags, rolling_windows, calendar_features, holiday_features,
+            exog=exog,
         )
         actual = y.loc[origin:end]
         scores.append(mape(actual, pred))
+    return scores
+
+
+def score_seasonal_naive_origins(
+    y: pd.Series,
+    origins: list[pd.Timestamp],
+    horizon_hours: int,
+    season_length: int,
+) -> list[float]:
+    """Score a seasonal naive forecast at each origin: every forecast hour
+    repeats the value observed season_length hours earlier (168 = same hour
+    last week). The benchmark any trained model has to beat.
+
+    For horizon_hours > season_length the pattern repeats from the last
+    observed season (never reads an actual value at or after the origin).
+
+    Args:
+        y: Full target series covering the history before each origin and the
+            scored horizon after it.
+        origins: Rolling-origin timestamps from select_cv_origins.
+        horizon_hours: Forecast horizon per origin.
+        season_length: Seasonal period in hours.
+
+    Returns:
+        List of MAPE scores, one per origin with a full season of history and
+        a full horizon of actuals.
+    """
+    scores = []
+    for origin in origins:
+        end = origin + pd.Timedelta(hours=horizon_hours - 1)
+        if end > y.index[-1]:
+            continue
+        last_season = y.loc[origin - pd.Timedelta(hours=season_length): origin - pd.Timedelta(hours=1)]
+        if len(last_season) < season_length:
+            continue
+        reps = int(np.ceil(horizon_hours / season_length))
+        pred_values = np.tile(last_season.to_numpy(dtype=float), reps)[:horizon_hours]
+        actual = y.loc[origin:end]
+        scores.append(mape(actual, pd.Series(pred_values, index=actual.index)))
     return scores

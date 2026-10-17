@@ -7,3 +7,15 @@ holiday_features: true
 
 # Trailing hours snapshotted per run for serving-time lag seeding (Plan 5).
 snapshot_hours: 168
+
+# Weather-derived features (all prefixed wx_), built from cleaning.yaml's
+# weather block. Load vs temperature is U-shaped, so degree hours split it
+# into a cooling arm (wx_cdh) and a heating arm (wx_hdh) around
+# comfort_temp_f; heat index and wind chill capture humidity and wind; the
+# trailing temperature means capture multi-day heat/cold build-up.
+weather_features:
+  enabled: true
+  comfort_temp_f: 65
+  rolling_windows: [24, 72]
+  heat_index: true
+  wind_chill: true
