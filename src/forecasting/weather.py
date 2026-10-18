@@ -18,9 +18,10 @@ model, and serving refuses to forecast with a wx_ model until a weather
 forecast feed exists.
 
 CAVEAT: training and scoring use observed (historical) weather for future
-hours, i.e. a perfect weather forecast. Real-world accuracy with a genuine
-day-ahead weather forecast would be somewhat lower; scores from a weather
-model are an upper bound on what the same model achieves in production.
+hours: a perfect-weather-information experiment. This does not establish
+operational accuracy with a genuine day-ahead weather forecast, nor a strict
+mathematical bound on production accuracy. A forecast feed needs its own
+evaluation; the no-weather serving fallback remains available.
 """
 import logging
 from typing import Any

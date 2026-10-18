@@ -17,11 +17,8 @@ from statsmodels.tsa.statespace.sarimax import SARIMAX
 def fit_ets(y: pd.Series, hyperparameters: dict[str, Any]) -> Any:
     """Fit a state-space ETS (error-trend-seasonal) model.
 
-    Uses statsmodels' modern state-space ETSModel — not the legacy
-    tsa.holtwinters.ExponentialSmoothing — because only the state-space
-    implementation supports get_prediction(dynamic=...), the mechanism the
-    rolling-origin CV in train_forecast.py depends on to score multi-step
-    forecasts from many origins without refitting.
+    Uses ETSModel so evaluation can smooth fixed training parameters over
+    expanding pre-cutoff observations and issue a fresh horizon forecast.
 
     Args:
         y: Training target series, DatetimeIndex, hourly.

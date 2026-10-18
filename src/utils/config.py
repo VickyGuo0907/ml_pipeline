@@ -528,7 +528,7 @@ class ForecastModelsConfig(BaseModel):
     """
 
     models: list[ModelConfig] = Field(
-        ..., description="Model definitions (types: seasonal_naive, ets, sarimax, gbm)",
+        ..., description="Model definitions (types: seasonal_naive, ets, sarimax, gbm, gbm_direct)",
     )
     random_state: int = Field(default=42)
     train_test_split: float = Field(

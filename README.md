@@ -185,19 +185,37 @@ new template layer:
   `ForecastEvaluationConfig` (in `src/utils/config.py`, re-exported from `src.utils`) replace the
   tabular `CleaningConfig`/`FeaturesConfig`/`ModelsConfig`/`EvaluationConfig` for this pipeline's
   `cleaning.yaml`/`features.yaml`/`models.yaml` — same file names, different schema.
-- **Models:** a seasonal naive benchmark (same hour last week; scored, never registered), ETS
-  (`statsmodels`, fit once, scored via rolling-origin cross-validation), and LightGBM trained on
-  engineered lag/rolling/calendar/holiday features plus optional hourly weather (`wx_` features),
-  scored via recursive multi-step forecasting. A second LightGBM without weather runs alongside as an
-  ablation. All are compared on MAPE over the same rolling-origin windows, and the run champion is
-  the registered model with the lowest cross-validated MAPE. SARIMAX is still supported by the code
-  but dropped from the default config (memory-hungry on hourly data, never competitive).
+- **Models:** daily (lag 24) and weekly (lag 168) seasonal-naive baselines (scored,
+  never registered), ETS, and LightGBM with and without weather. The final 20% of training
+  is reserved for chronological validation: parameters are fitted once before its first
+  midnight cutoff and frozen across validation origins. Recursive and direct LightGBM share
+  cutoff and forecast-valid-time calendar/weather features; the direct model predicts each lead
+  independently using a lead-conditioned regressor and is reported as an evaluation benchmark.
+  Models are then refitted on all training data for test evaluation. Legacy `cv_` names refer to this chronological validation,
+  not in-sample scores or independently refitted folds. Every model uses identical sampled
+  midnight cutoffs and 24-hour horizons; ETS state and recursive regression lag inputs refresh
+  using only pre-cutoff load. The registered champion has the lowest validation MAPE.
+  SARIMAX remains supported but is excluded from the default run; current work prioritizes
+  weather exploration and regression following professor feedback.
+- **Evaluation:** the YAML report and returned results include MAE/RMSE (MW), MAPE (%), MASE,
+  and errors by hour, meteorological season, and US federal holiday, with group sample counts.
+  MASE uses one fixed training-only mean absolute daily seasonal difference (m=24); it is null
+  for a zero/undefined denominator. Per-hour prediction Parquets and explicit fit/cutoff
+  metadata support reproducibility. Fifty cutoffs are sampled across each evaluation period;
+  these results are not an all-days census.
+- **Weather analysis:** `src/forecasting/analysis_forecast.py` summarizes all training hours
+  in fixed temperature bins by season and compares saved regression predictions paired by
+  cutoff and forecast timestamp. The notebook exports `*_weather_analysis.json`/`.md`,
+  training temperature summaries, and daily comparison CSVs under the run's reports directory.
+  Comparisons include days improved/worse and seasonal, hourly, and holiday gains with
+  independent day counts. These are descriptive results, not test-driven feature selection.
 - **Weather (optional):** a `weather` block in `cleaning.yaml` makes the clean stage expect a second
   raw file (`weather_hourly.csv`), aggregate its stations into a weighted regional series, and join
   it as `wx_` columns; `weather_features` in `features.yaml` derives cooling/heating degree hours,
   heat index, wind chill and trailing temperature means (`src/forecasting/weather.py`). Weather
-  values for future hours are treated as known (observed weather standing in for a perfect weather
-  forecast), so weather-model scores are an upper bound on production accuracy.
+  values for future hours are observed historical weather: this is explicitly a
+  **perfect-weather-information experiment**, not an operational weather-forecast evaluation.
+  The no-weather model remains the serving fallback until a forecast feed is available.
 - **`unsupervised_explore` and `drift_report` are disabled** for this pipeline
   (`config/pjm_load_forecast/orchestration.yaml`): PCA/k-means don't apply to a single univariate
   series, and forecasting drift comparison isn't implemented.
@@ -380,7 +398,7 @@ for how the DAG dispatches to a parallel set of stage functions for this `proble
 - **Weather:** hourly temperature, dew point, humidity and wind for PHL, EWR, BWI and DCA from the
   [Open-Meteo Historical Weather API](https://open-meteo.com/en/docs/historical-weather-api) (free,
   no key), staged by `scripts/stage_pjm_load_forecast_landing.py`.
-- **Models:** seasonal naive benchmark, ETS, LightGBM with weather, and LightGBM without weather
+- **Models:** daily and weekly seasonal-naive baselines, ETS, recursive LightGBM with weather and without, and direct lead-conditioned LightGBM with weather
   (`config/pjm_load_forecast/models.yaml`) — see
   [Forecasting Pipelines](#forecasting-pipelines) above.
 
@@ -396,14 +414,14 @@ for how the DAG dispatches to a parallel set of stage functions for this `proble
    delete the `weather` block from `cleaning.yaml` and `weather_features` from `features.yaml`.
 3. Trigger `pjm_load_forecast_pipeline` in the Airflow UI (http://localhost:8080), same as any
    other pipeline — see [Running the DAG](#running-the-dag).
-4. Check training results in MLflow (http://localhost:5001): each run logs four models
-   (`pjm_load_forecast_seasonal_naive`, `pjm_load_forecast_ets`, `pjm_load_forecast_gbm`,
-   `pjm_load_forecast_gbm_no_weather`), each with
-   `cv_mape_mean`/`cv_mape_std` (training-set rolling-origin CV) and, after the register stage,
+4. Check training results in MLflow (http://localhost:5001): each run logs six model entries
+   (`pjm_load_forecast_daily_naive`, `pjm_load_forecast_seasonal_naive`, `pjm_load_forecast_ets`, `pjm_load_forecast_gbm`,
+   `pjm_load_forecast_gbm_no_weather`, `pjm_load_forecast_gbm_direct`), each with
+   `cv_mape_mean`/`cv_mape_std` (chronological validation, fitted before its first cutoff) and, after the register stage,
    `test_mape_mean` (held-out test-set scoring) as a model-version tag. The run champion (lowest
    `cv_mape`) is tagged `run_champion: true` on its registered version, mirroring the tabular
-   pipelines' champion/challenger tagging. The seasonal naive benchmark appears in the evaluation
-   report with `status: baseline` (scored for comparison, not registered).
+   pipelines' champion/challenger tagging. Both seasonal-naive baselines appear with `status: baseline`; direct LightGBM appears with
+   `status: benchmark`. All three include complete comparison metrics and are not registered.
 5. Promote a model version to Production in the MLflow UI (manual click, same as every other
    pipeline — no auto-promotion).
 6. Set `SERVING_MODEL_NAME` to the promoted model's full name (e.g. `pjm_load_forecast_gbm_no_weather`) and

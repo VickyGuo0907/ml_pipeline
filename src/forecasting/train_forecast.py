@@ -1,15 +1,4 @@
-"""Training stage for time-series forecasting pipelines: scores a seasonal
-naive benchmark and trains ETS, SARIMAX, and GBM-lagged models, each scored via rolling-origin
-cross-validation (average MAPE across n_windows origins sampled from the
-training set), and logs each to MLflow.
-
-ETS/SARIMAX are fit once and scored via statsmodels' dynamic get_prediction
-(no per-origin refit — verified during planning that dynamic=origin produces
-genuine multi-step forecasts, not one-step-ahead using true history). GBM is
-fit once (standard sklearn fit) and scored via the shared recursive_forecast()
-helper at the same origins, so all three models are compared on the same
-multi-step-ahead footing.
-"""
+"""Chronological validation followed by final training and MLflow logging."""
 import logging
 from pathlib import Path
 from typing import Any
@@ -20,15 +9,18 @@ import mlflow.statsmodels
 import numpy as np
 import pandas as pd
 
+from src.forecasting.direct_forecast import fit_direct_forecaster
 from src.forecasting.model_registry import fit_ets, fit_sarimax
 from src.forecasting.rolling_origin import (
-    score_gbm_origins,
-    score_seasonal_naive_origins,
-    score_statsmodels_origins,
+    evaluate_origins,
     select_cv_origins,
 )
 from src.forecasting.weather import is_weather_column
-from src.utils.config import load_forecast_features_config, load_forecast_models_config, load_pipeline_config
+from src.utils.config import (
+    load_forecast_features_config,
+    load_forecast_models_config,
+    load_pipeline_config,
+)
 from src.utils.diagnostics import feature_importance
 from src.utils.io import resolve_run_path
 from src.utils.model_registry import get_model
@@ -42,7 +34,7 @@ def train_forecast_models(
     config_dir: str | Path = "config",
     mlflow_tracking_uri: str = "http://mlflow-server:5000",
 ) -> dict[str, Any]:
-    """Train all configured forecasting models and log rolling-origin CV metrics to MLflow.
+    """Validate chronologically, then fit final models and log metrics to MLflow.
 
     Args:
         features_dir: Directory containing train/test parquet files.
@@ -51,7 +43,7 @@ def train_forecast_models(
         mlflow_tracking_uri: MLflow tracking server URI.
 
     Returns:
-        Dictionary with per-model MLflow run IDs and CV metrics. Models that
+        Dictionary with per-model MLflow run IDs and chronological validation metrics. Models that
         fail to fit or score are logged and skipped, not raised.
 
     Raises:
@@ -69,27 +61,32 @@ def train_forecast_models(
 
     train_df = pd.read_parquet(train_path)
     X_train = train_df.drop(columns=[target_col])
-    y_train = train_df[target_col]
     feature_columns = list(X_train.columns)
 
     mlflow.set_tracking_uri(mlflow_tracking_uri)
     eval_cfg = models_config.evaluation
     min_history_hours = max(features_config.lags + features_config.rolling_windows, default=1)
-    origins = select_cv_origins(
-        train_df.index, eval_cfg.n_windows, eval_cfg.horizon_hours, min_history_hours=min_history_hours,
-    )
+    # Reserve the last 20% of training for chronological validation. Parameters
+    # are fitted once before its first cutoff, then frozen across all windows.
+    validation_index = train_df.index[max(int(len(train_df) * 0.8), min_history_hours) :]
+    origins = select_cv_origins(validation_index, eval_cfg.n_windows, eval_cfg.horizon_hours, 0)
+    if not origins:
+        raise ValueError("Training set too short for chronological daily validation")
+    fit_df = train_df.loc[train_df.index < origins[0]]
 
     training_results: dict[str, Any] = {"run_id": run_id, "models": {}}
 
     for model_cfg in models_config.models:
         try:
             with mlflow.start_run(run_name=f"{run_id}_{model_cfg.name}"):
-                mlflow.set_tags({
-                    "model_name": model_cfg.name,
-                    "model_type": model_cfg.type,
-                    "run_id": run_id,
-                    "pipeline_type": pipeline_config.pipeline_type,
-                })
+                mlflow.set_tags(
+                    {
+                        "model_name": model_cfg.name,
+                        "model_type": model_cfg.type,
+                        "run_id": run_id,
+                        "pipeline_type": pipeline_config.pipeline_type,
+                    }
+                )
                 # Per-model feature set: a gbm with use_weather: false drops the
                 # wx_ columns, giving a same-run with/without-weather ablation.
                 hyperparameters = dict(model_cfg.hyperparameters)
@@ -101,79 +98,105 @@ def train_forecast_models(
                 mlflow.log_param("target_col", target_col)
                 mlflow.log_param("horizon_hours", eval_cfg.horizon_hours)
                 mlflow.log_param("n_windows", len(origins))
-                mlflow.log_dict({"columns": model_features}, "feature_columns.json")
+                direct_columns = (
+                    model_features + ["lead_hour"]
+                    if model_cfg.type == "gbm_direct"
+                    else model_features
+                )
+                mlflow.log_dict({"columns": direct_columns}, "feature_columns.json")
+                direct_stride = int(hyperparameters.pop("training_stride_hours", 6))
+                direct_examples: dict[str, int] = {}
 
+                def fit_partition(
+                    partition: pd.DataFrame,
+                    model_cfg: Any = model_cfg,
+                    hyperparameters: dict[str, Any] = hyperparameters,
+                    model_features: list[str] = model_features,
+                    direct_stride: int = direct_stride,
+                    direct_examples: dict[str, int] = direct_examples,
+                ) -> Any:
+                    if model_cfg.type == "seasonal_naive":
+                        return None
+                    if model_cfg.type == "gbm":
+                        estimator = get_model("gbm", hyperparameters)
+                        estimator.fit(partition[model_features], partition[target_col])
+                        return estimator
+                    if model_cfg.type == "gbm_direct":
+                        estimator, _, examples = fit_direct_forecaster(
+                            partition,
+                            target_col,
+                            model_features,
+                            eval_cfg.horizon_hours,
+                            direct_stride,
+                            features_config.calendar_features,
+                            features_config.holiday_features,
+                            hyperparameters,
+                            get_model,
+                        )
+                        direct_examples["fit"] = examples
+                        return estimator
+                    if model_cfg.type == "ets":
+                        return fit_ets(partition[target_col], hyperparameters)
+                    if model_cfg.type == "sarimax":
+                        cap = hyperparameters.get("max_train_hours")
+                        subset = partition.tail(cap) if cap else partition
+                        exog = subset.get("is_holiday")
+                        return fit_sarimax(subset[target_col], hyperparameters, exog=exog)
+                    raise ValueError(f"Unknown forecasting model type '{model_cfg.type}'")
+
+                validation_model = fit_partition(fit_df)
+                validation_metrics, validation_predictions = evaluate_origins(
+                    validation_model,
+                    model_cfg.type,
+                    train_df,
+                    target_col,
+                    direct_columns if model_cfg.type == "gbm_direct" else model_features,
+                    origins,
+                    eval_cfg.horizon_hours,
+                    features_config,
+                    fit_df[target_col],
+                    int(hyperparameters.get("season_length", 168)),
+                )
+                window_scores = [
+                    float(np.mean(np.abs((g.actual - g.predicted) / g.actual)) * 100)
+                    for _, g in validation_predictions.groupby("origin")
+                ]
+                mlflow.log_dict(validation_metrics, "validation_metrics.json")
+                mlflow.log_dict(
+                    {
+                        "cutoffs": [str(o) for o in origins],
+                        "parameter_fit_end": str(fit_df.index[-1]),
+                        "parameter_refit_cadence": "once before validation; final refit on full train",
+                        "state_refresh": "pre-cutoff observations only",
+                    },
+                    "validation_protocol.json",
+                )
+                mlflow.set_tag("weather_information", validation_metrics["weather_information"])
+                mlflow.log_param("validation_fit_end", str(fit_df.index[-1]))
+                for key in ("mae", "rmse", "mape", "mase"):
+                    if validation_metrics[key] is not None:
+                        mlflow.log_metric(f"cv_{key}", validation_metrics[key])
+                fitted = fit_partition(train_df)
                 if model_cfg.type == "seasonal_naive":
-                    season_length = int(hyperparameters.get("season_length", 168))
-                    mlflow.log_param("season_length", season_length)
-                    window_scores = score_seasonal_naive_origins(
-                        y_train, origins, eval_cfg.horizon_hours, season_length,
+                    mlflow.log_param(
+                        "season_length", int(hyperparameters.get("season_length", 168))
                     )
-                    # A benchmark, not a deployable model: no artifact is logged,
-                    # and the evaluate stage scores it but never registers it.
-                elif model_cfg.type == "ets":
-                    fitted = fit_ets(y_train, model_cfg.hyperparameters)
-                    window_scores = score_statsmodels_origins(fitted, y_train, origins, eval_cfg.horizon_hours)
+                elif model_cfg.type in ("ets", "sarimax"):
                     mlflow.statsmodels.log_model(fitted, name="model")
-                elif model_cfg.type == "sarimax":
-                    # SARIMAX's Kalman filter state-space cost grows with series
-                    # length; a seasonal_order period (e.g. 24) fit over a
-                    # multi-year hourly history (100k+ rows) is memory-prohibitive
-                    # on a typical local/Docker deployment. Daily/weekly
-                    # seasonality doesn't need more than a couple of years of
-                    # history to estimate well, so max_train_hours (optional,
-                    # models.yaml hyperparameter) caps how much trailing history
-                    # SARIMAX fits on — ETS and GBM above/below are unaffected
-                    # and still train on the full series.
-                    max_train_hours = model_cfg.hyperparameters.get("max_train_hours")
-                    sarimax_df = train_df.tail(max_train_hours) if max_train_hours else train_df
-                    sarimax_y = sarimax_df[target_col]
-                    exog = sarimax_df["is_holiday"] if "is_holiday" in sarimax_df.columns else None
-                    if max_train_hours:
-                        sarimax_origins = select_cv_origins(
-                            sarimax_y.index, eval_cfg.n_windows, eval_cfg.horizon_hours,
-                            min_history_hours=min_history_hours,
+                    if model_cfg.type == "sarimax" and hyperparameters.get("max_train_hours"):
+                        mlflow.log_param(
+                            "sarimax_train_hours",
+                            min(len(train_df), hyperparameters["max_train_hours"]),
                         )
-                        mlflow.log_param("sarimax_train_hours", len(sarimax_y))
-                    else:
-                        sarimax_origins = origins
-                    fitted = fit_sarimax(sarimax_y, model_cfg.hyperparameters, exog=exog)
-                    if not fitted.mle_retvals.get("converged", True):
-                        logger.warning(
-                            "SARIMAX fit for %s did not converge (order/seasonal_order are "
-                            "fixed, not searched, so this can happen on some data spans) — "
-                            "proceeding with the unconverged fit's parameters.", model_cfg.name,
-                        )
-                    mlflow.set_tag("sarimax_converged", fitted.mle_retvals.get("converged", True))
-                    window_scores = score_statsmodels_origins(fitted, sarimax_y, sarimax_origins, eval_cfg.horizon_hours)
-                    mlflow.statsmodels.log_model(fitted, name="model")
-                elif model_cfg.type == "gbm":
+                elif model_cfg.type in ("gbm", "gbm_direct"):
                     mlflow.log_param("use_weather", use_weather)
-                    model = get_model("gbm", hyperparameters)
-                    model.fit(X_train[model_features], y_train)
-                    window_scores = score_gbm_origins(
-                        model, train_df, target_col, model_features, origins, eval_cfg.horizon_hours,
-                        features_config.lags, features_config.rolling_windows,
-                        features_config.calendar_features, features_config.holiday_features,
-                    )
-                    # LightGBM's Booster/LGBMRegressor aren't on skops's default
-                    # trusted-type list, so mlflow.sklearn.log_model() silently
-                    # refuses to save gbm models here (same issue documented in
-                    # src/train.py's _MLFLOW_LOG_MODEL_FNS) — use the lightgbm
-                    # flavor instead, which serializes natively.
-                    mlflow.lightgbm.log_model(model, name="model")
-                    # Free after fit() - no separate config toggle needed the way
-                    # the tabular pipeline's optional feature_importance block has
-                    # one, since GBM is the only forecasting model type where this
-                    # attribute exists at all (ETS/SARIMAX have no equivalent).
-                    importance = feature_importance(model, model_features)
+                    mlflow.lightgbm.log_model(fitted, name="model")
+                    importance = feature_importance(fitted, direct_columns)
                     if importance:
                         mlflow.log_dict(importance, "feature_importance.json")
-                else:
-                    raise ValueError(
-                        f"Unknown forecasting model type '{model_cfg.type}'. "
-                        f"Expected one of: seasonal_naive, ets, sarimax, gbm."
-                    )
+                    if model_cfg.type == "gbm_direct":
+                        mlflow.log_param("direct_training_stride_hours", direct_stride)
+                        mlflow.log_param("direct_training_examples", direct_examples.get("fit", 0))
 
                 if not window_scores:
                     raise ValueError(
@@ -194,10 +217,14 @@ def train_forecast_models(
                 "cv_mape_mean": cv_mape_mean,
                 "cv_mape_std": cv_mape_std,
                 "n_windows_scored": len(window_scores),
+                "validation_metrics": validation_metrics,
             }
             logger.info(
                 "Trained %s: cv_mape_mean=%.2f%% +/- %.2f%% (%d windows)",
-                model_cfg.name, cv_mape_mean, cv_mape_std, len(window_scores),
+                model_cfg.name,
+                cv_mape_mean,
+                cv_mape_std,
+                len(window_scores),
             )
         except Exception as e:
             logger.warning("Training skipped for %s: %s", model_cfg.name, e)

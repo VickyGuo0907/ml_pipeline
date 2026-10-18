@@ -325,6 +325,13 @@ class TestTrainEvaluateWeatherAblation:
         assert statuses == {"t_naive": "baseline", "t_gbm": "registered", "t_gbm_nowx": "registered"}
         report = yaml.safe_load(next((tmp_path / "reports").rglob("*evaluation.yaml")).read_text())
         assert report["run_champion"] in {"t_gbm", "t_gbm_nowx"}
+        for name, returned in result["registered_models"].items():
+            for metric in ("mae", "rmse", "mape", "mase", "test_mape_mean", "test_mape_std", "cv_mape_mean"):
+                assert returned[metric] == report["models"][name][metric]
+            assert set(returned["errors_by"]) == {"hour", "season", "holiday", "lead_hour"}
+            assert returned["n_windows_scored"] == len(result["protocol"]["cutoffs"])
+        assert result["registered_models"]["t_gbm"]["weather_information"] == "perfect-weather-information experiment"
+        assert result["registered_models"]["t_gbm_nowx"]["weather_information"] == "no weather inputs"
         # Load here is driven by temperature, so weather should clearly help.
         assert report["models"]["t_gbm"]["test_mape_mean"] < report["models"]["t_gbm_nowx"]["test_mape_mean"]
 

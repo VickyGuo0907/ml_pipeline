@@ -1,6 +1,6 @@
 # Models trained and compared per run:
-#   - seasonal_naive: same hour last week - the benchmark every other model
-#     has to beat. Scored on the same rolling-origin windows, never registered.
+#   - seasonal_naive: same hour yesterday and same hour last week.
+#     Both use the same daily cutoffs and 24-hour horizons, never registered.
 #   - ets: classical univariate baseline.
 #   - gbm: LightGBM regression on lag/rolling/calendar/holiday features plus
 #     hourly weather (wx_ features) - the main model.
@@ -17,6 +17,11 @@
 # The sarimax model type is still supported by the code if needed.
 
 models:
+  - name: "pjm_load_forecast_daily_naive"
+    type: "seasonal_naive"
+    hyperparameters:
+      season_length: 24
+
   - name: "pjm_load_forecast_seasonal_naive"
     type: "seasonal_naive"
     hyperparameters:
@@ -33,6 +38,17 @@ models:
     type: "gbm"
     hyperparameters:
       n_estimators: 200
+      learning_rate: 0.05
+      max_depth: 7
+      num_leaves: 31
+      random_state: 42
+      n_jobs: -1
+
+  - name: "pjm_load_forecast_gbm_direct"
+    type: "gbm_direct"
+    hyperparameters:
+      training_stride_hours: 6
+      n_estimators: 150
       learning_rate: 0.05
       max_depth: 7
       num_leaves: 31

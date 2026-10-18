@@ -424,7 +424,7 @@ def test_load_pjm_forecast_recipe_configs():
     assert cleaning.max_gap_hours >= 1
     assert features.lags
     model_types = {m.type for m in models.models}
-    assert model_types == {"seasonal_naive", "ets", "gbm"}
+    assert model_types == {"seasonal_naive", "ets", "gbm", "gbm_direct"}
     # Weather: four PJME metro stations, weather features on, and a
     # no-weather GBM ablation alongside the weather GBM.
     assert {st.name for st in cleaning.weather.stations} == {"PHL", "EWR", "BWI", "DCA"}
