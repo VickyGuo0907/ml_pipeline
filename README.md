@@ -76,6 +76,39 @@ All config is YAML, validated by Pydantic (`src/utils/config.py`):
 | `pjm_load_forecast` | PJM East hourly load, 24h ahead | `problem_type: forecasting`, see below |
 | `m6_returns_risk` | Monthly ETF/stock log-returns (M6) | `problem_type: finance` |
 
+Each pipeline is just a `config/<name>/` directory. The code in `src/` is shared.
+
+### `biomedical_clinical`
+
+CMS Hospital Compare CSVs (~4,800 hospitals: quality measures, HCAHPS scores, safety grades),
+predicting the pneumonia `ExcessReadmissionRatio`. It uses the full template: pivot-joins
+across files, a Box-Cox target transform, VIF pruning, all six model types and all three
+optional tasks. Put the files in `data/biomedical_clinical/landing/`.
+
+### `bioinfo_gene`
+
+Gene expression data predicting `expression_level`. It's here to show the config-driven design
+works on a different domain: a leaner config (two models, no joins), with profiling on and
+clustering/drift off, and no Python changes. Put the CSVs in `data/bioinfo_gene/landing/`.
+
+### `hospital_readmission_lagged`
+
+The same CMS source, but predicting each hospital's 2025 pneumonia readmission ratio from its
+2024 measures (~3,063 hospitals matched across both years). It adds a direct-join source
+(`Hospital_General_Information`) alongside the pivot-joins.
+
+Leakage lesson: an early version reached test R² ~0.22 because `Count of READM Measures
+Better/Worse` was a proxy for the hospital's own past readmission performance. Dropping it in
+`config/hospital_readmission_lagged/features.yaml` gave an honest R² of ~0.05-0.07. Any field
+derived from the same event as the target deserves that suspicion.
+
+### `m6_returns_risk`
+
+Monthly log-returns for a panel of liquid US ETFs and stocks (M6 competition), forecasting
+next-month return and reporting forecast-error uncertainty. Models: random walk, historical
+mean, ARIMA and a cross-sectional LightGBM. Stage the data with
+`uv run python -m scripts.stage_m6_returns_risk_landing` (yfinance).
+
 ### `pjm_load_forecast`
 
 For `problem_type: forecasting`, `dag_factory.py` swaps in the `src/forecasting/` stage functions
