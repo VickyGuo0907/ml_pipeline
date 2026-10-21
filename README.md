@@ -2,505 +2,116 @@
 
 ![CI](https://github.com/VickyGuo0907/ml_pipeline/actions/workflows/ci.yml/badge.svg)
 
-A common, flexible ML pipeline template for tabular regression problems — ingestion, validation,
-feature engineering, training, evaluation, and serving, all driven by YAML config rather than
-code changes. The goal is a reusable pipeline, not a one-off script: add a new dataset by
-dropping a `config/<pipeline>/` directory, and `dag_factory.py` auto-discovers it and registers
-a new Airflow DAG with no Python changes required.
-
-A fourth pipeline, `pjm_load_forecast`, extends the same config-driven, auto-discovered DAG
-pattern to time-series forecasting (`problem_type: forecasting`) — see
-[Forecasting Pipelines](#forecasting-pipelines) below for how it differs from the tabular
-regression pipelines above.
-
-Three demo pipelines exercise this in the repo today:
-
-- **`biomedical_clinical`** — CMS Hospital Compare hospital readmission data (the primary
-  walkthrough in this README, since it has the richest config: multi-source pivot-joins, Box-Cox,
-  VIF pruning, six model types)
-- **`bioinfo_gene`** — a second, differently-shaped dataset (gene expression), proving the same
-  codebase adapts to a new domain through config alone, with its own optional-task toggles
-  (profiling on, clustering and drift off)
-- **`hospital_readmission_lagged`** — same CMS source, different problem shape: predicts a
-  hospital's 2025 pneumonia excess readmission ratio from its 2024 quality measures (a genuine
-  one-period-ahead forecast, not same-year association). Also the pipeline where a leakage-prone
-  predictor was found and removed post-launch — see its section under
-  [Demo Pipelines](#demo-pipelines) for the story.
-
-CMS Hospital Compare is one demo dataset used to present the pipeline, not the point of the
-project — the point is that swapping it for a different dataset takes a new config directory,
-not a new pipeline.
+A config-driven ML pipeline template on local docker-compose: ingestion, validation, profiling,
+cleaning, feature engineering, training, evaluation, registration and serving. Adding a dataset
+means adding a `config/<pipeline>/` directory. `src/dags/dag_factory.py` discovers it and
+registers a new Airflow DAG, with no Python changes.
 
 ## Quick Start
 
-### Prerequisites
-- Docker & Docker Compose
-- Python 3.11+
-- `uv` package manager
+Prerequisites: Docker & Docker Compose, Python 3.11+, [`uv`](https://docs.astral.sh/uv/).
 
-### Setup
-
-1. **Clone and configure:**
-   ```bash
-   cp .env.example .env
-   ```
-
-2. **Start all services:**
-   ```bash
-   docker compose up -d
-   ```
-
-3. **Verify services are healthy:**
-   ```bash
-   docker compose ps
-   ```
-
-   All 8 services should show `Healthy` or `Running`:
-   - Airflow Postgres (5432)
-   - MLflow Postgres (5433)
-   - Airflow Webserver (8080)
-   - Airflow Scheduler
-   - Airflow Triggerer
-   - MLflow Server (5001)
-   - FastAPI Server (8000)
-   - Reports Server (8888)
-
-4. **Install dependencies:**
-   ```bash
-   uv sync
-   ```
-
-### Access UIs
+```bash
+cp .env.example .env
+docker compose up -d      # 8 services: Airflow (webserver, scheduler, triggerer, Postgres),
+                          # MLflow (server, Postgres), FastAPI, reports server
+docker compose ps         # all should be Healthy / Running
+uv sync
+```
 
 | Service | URL | Login |
 |---------|-----|-------|
 | Airflow | http://localhost:8080 | airflow / airflow |
-| MLflow | http://localhost:5001 | N/A |
-| FastAPI | http://localhost:8000/docs | N/A |
-| Reports | http://localhost:8888 | N/A |
+| MLflow | http://localhost:5001 | - |
+| FastAPI | http://localhost:8000/docs | - |
+| Reports | http://localhost:8888 | - |
 
-## Pipeline Architecture
+Put data in `data/<pipeline>/landing/`, then trigger `<pipeline>_pipeline` in the Airflow UI.
 
-### Stages (7 core + 4 optional — stages 6 and 6b run in parallel; 6c is sequential, after 6 and before train)
+## Pipeline
 
-**Core tasks (always run):**
-1. **ingest** — Move files from `data/<pipeline>/landing` to `data/<pipeline>/raw/<run_id>`, write `manifest.yaml`
-2. **validate_raw** — Pandera schema check per source file; rules (required columns, bounds, min rows) from `pipeline.yaml`
-3. **clean** — Type coercion, sentinel replacement, missing value imputation, deduplication → `data/<pipeline>/interim/<run_id>`
-4. **feature_engineer** — Pivot-join assembly, encoding, NZV filter, Box-Cox, VIF pruning, scaling, train/test split
-5. **validate_features** *(parallel with 6b when enabled)* — Row count ≥ 100, all-numeric guard, Pandera check on target column (config-driven from `pipeline.yaml`)
-6. **train** — All models from `models.yaml`, log metrics to MLflow
-7. **register** — Register models to MLflow Staging (no auto-promotion); refuses if `test_rmse` is invalid or `test_r2 < -1.0`
+One DAG per pipeline:
 
-**Optional tasks (controlled by `tasks.enabled` in `orchestration.yaml`):**
-- **profile** *(after validate_raw)* — ydata-profiling HTML reports per source; set `profile: false` to skip
-- **unsupervised_explore** *(parallel with validate_features)* — PCA + k-means segmentation; algorithm and `max_k` config-driven via `pipeline.yaml`; writes YAML report; does not feed into training; set `unsupervised_explore: false` to skip
-- **drift_report** *(after register)* — Evidently AI drift monitoring (current vs previous training set); set `drift_report: false` to skip
+1. **ingest:** landing → `raw/<run_id>`, with a `manifest.yaml` of checksums
+2. **validate_raw:** pandera checks per source file (rules from `pipeline.yaml`)
+3. **clean:** type coercion, sentinel values, imputation, dedup → `interim/<run_id>`
+4. **feature_engineer:** joins, encoding, NZV filter, Box-Cox, VIF pruning, train/test split → `features/<run_id>`
+5. **validate_features:** pandera checks on the feature matrix
+6. **train:** every model in `models.yaml`, logged to MLflow
+7. **register:** registers to MLflow Staging. **No auto-promotion**: Production is a manual UI click.
 
-**Always-present but usually a no-op:**
-- **create_benchmark** *(after validate_features, before train)* — unlike the tasks above, this isn't toggled via `tasks.enabled`; it's always in the DAG but does nothing on a normal scheduled run. Trigger the DAG with `conf={"refresh_benchmark": true}` to snapshot the current run's training features as the new fixed benchmark set, used by the regression check below.
+Optional, toggled in `orchestration.yaml` (`tasks.enabled`):
+- `profile`: ydata-profiling reports
+- `unsupervised_explore`: PCA and k-means
+- `drift_report`: Evidently, comparing against the previous training set
 
-### Data Flow
+`create_benchmark` stays a no-op unless the DAG is triggered with `conf={"refresh_benchmark": true}`.
+Each run tags its best model `run_champion`. When a benchmark exists, each new model is also
+checked against its Production version using bootstrapped RMSE confidence intervals. This check
+is informational only and never changes what gets promoted.
 
-```
-data/<pipeline>/landing          (e.g. data/biomedical_clinical/landing)
-    ↓ [ingest]
-data/<pipeline>/raw/<run_id>/manifest.yaml
-    ↓ [validate_raw] [profile]
-data/<pipeline>/interim/<run_id>
-    ↓ [clean]
-data/<pipeline>/features/<run_id>/
-├── train.parquet
-├── test.parquet
-└── manifest.yaml
-    ↓ [validate_features] [train] [evaluate_register]
-mlflow-artifacts/
-├── linear_baseline
-├── lightgbm_gbm
-└── drift_reports/
-```
+Diagrams (open in a browser): `diagrams/01-architecture.html` through
+`06-forecasting-architecture.html`.
 
-### Model Registry
+## Configuration
 
-- Model types come from `models.yaml` per pipeline (linear family + LightGBM at minimum;
-  `biomedical_clinical` also runs Ridge/Lasso/Random Forest)
-- **Registered model names are pipeline-prefixed** (e.g. `hospital_readmission_lagged_lightgbm_gbm`,
-  not just `lightgbm_gbm`) — MLflow's registry namespace is shared across every pipeline in this
-  repo, so an unprefixed name from one pipeline can silently collide with and overwrite another's
-  version history. `models.yaml`'s `name:` field must be the full prefixed name for every model.
-- All registered to MLflow `Staging`
-- **NO automatic promotion to Production** — manual UI click only
+All config is YAML, validated by Pydantic (`src/utils/config.py`):
 
-### Champion/Challenger & Regression Detection
-
-Each run's best-performing model (lowest `test_rmse`) is tagged `run_champion` in MLflow and
-recorded in `reports/<pipeline>/<run_id>_evaluation.yaml` as a top-level `run_champion` key.
-
-If a pipeline has `benchmark.enabled: true` in `pipeline.yaml` and a benchmark set has been
-created (see `create_benchmark` above), every newly registered model is also compared against
-its own Production version (same model name) on that fixed benchmark set, using bootstrapped
-95% confidence intervals rather than a raw point comparison — the train/test split is redrawn
-every run, so comparing `test_rmse` across two different runs directly isn't statistically valid.
-A `regression_vs_production: true` flag (plus both models' RMSE confidence intervals) is written
-to the evaluation report and MLflow version tags when the candidate's CI is entirely worse than
-Production's. This is purely informational — **nothing here changes what gets registered to
-Staging or promoted to Production**; promotion remains a manual MLflow UI action. A
-`drift_detected` flag (current vs previous run's training features) is attached alongside it as
-interpretive context: a regression alongside detected drift suggests the data changed, while a
-regression without drift suggests the model itself regressed.
-
-See `docs/superpowers/specs/2026-07-03-champion-challenger-regression-check-design.md` for the
-full design rationale, or open
-`diagrams/05-champion-challenger-regression-check.html` in a browser for a
-visual walkthrough of the data flow above.
-
-### Configuration
-
-All config in `config/` directory, validated via Pydantic models:
-
-- `config/base/defaults.yaml` — Shared defaults (retries, MLflow URI) inherited by all pipelines
-- `config/<pipeline>/orchestration.yaml` — Per-pipeline DAG settings (dag_id, schedule, directories, `reports_base_url`); `tasks.retries` / `retry_delay_minutes`; `tasks.enabled.profile` / `unsupervised_explore` / `drift_report` — set any to `false` to drop that optional task from the DAG
-- `config/<pipeline>/pipeline.yaml` — Sources, target, problem type, split ratio; `validation.sentinel_values` (dataset-specific missing-value strings); `validation.per_file_schemas` (per-file required columns and bounds); `unsupervised` (enable/disable PCA and clustering, set `max_k`)
-- `config/<pipeline>/cleaning.yaml` — Data cleaning recipes (impute strategy, protect columns, drop patterns)
-- `config/<pipeline>/features.yaml` — Feature engineering (encoding, join strategy, NZV filter, VIF threshold, scaling)
-- `config/<pipeline>/models.yaml` — Model hyperparameters (linear family, LightGBM); `evaluation` registration thresholds plus `champion_metric` (`test_rmse` or `cv_r2`) and `cv_tie_tolerance`; `cross_validation` (`folds`, optional `group_column`); `diagnostics` (residual assumption tests, `linear_types` only); `feature_importance` (`top_n` ranked coefficients or split gains). The last three default to `enabled: false`, so a pipeline that does not opt in behaves exactly as before they existed.
-
-Active pipelines: `biomedical_clinical` (@weekly), `bioinfo_gene` (@monthly),
-`hospital_readmission_lagged` (@monthly), `pjm_load_forecast` (@weekly).
-
-### Forecasting Pipelines
-
-`pjm_load_forecast` is a `problem_type: forecasting` pipeline — a different problem shape from
-the three tabular regression pipelines above (one univariate hourly series, not a row-per-entity
-feature matrix), handled by a parallel set of stage functions and config classes rather than a
-new template layer:
-
-- **Dispatch, not duplication:** `src/dags/dag_factory.py` reads each pipeline's `problem_type`
-  and swaps in `src/forecasting/{clean_forecast,features_forecast,train_forecast,evaluate_forecast}.py`
-  in place of the tabular `clean.py`/`features.py`/`train.py`/`evaluate.py` for `clean`,
-  `feature_engineer`, `train`, and `register` — the DAG shape (9 stages, same task IDs) and every
-  other tabular pipeline are unaffected; `profile_raw_files` additionally runs an MSTL seasonal
-  decomposition report (`src/profile.py:generate_mstl_report`) for forecasting pipelines only.
-- **Config classes:** `ForecastCleaningConfig`/`ForecastFeaturesConfig`/`ForecastModelsConfig`/
-  `ForecastEvaluationConfig` (in `src/utils/config.py`, re-exported from `src.utils`) replace the
-  tabular `CleaningConfig`/`FeaturesConfig`/`ModelsConfig`/`EvaluationConfig` for this pipeline's
-  `cleaning.yaml`/`features.yaml`/`models.yaml` — same file names, different schema.
-- **Models:** daily (lag 24) and weekly (lag 168) seasonal-naive baselines (scored,
-  never registered), ETS, and LightGBM with and without weather. The final 20% of training
-  is reserved for chronological validation: parameters are fitted once before its first
-  midnight cutoff and frozen across validation origins. Recursive and direct LightGBM share
-  cutoff and forecast-valid-time calendar/weather features; the direct model predicts each lead
-  independently using a lead-conditioned regressor and is reported as an evaluation benchmark.
-  Models are then refitted on all training data for test evaluation. Legacy `cv_` names refer to this chronological validation,
-  not in-sample scores or independently refitted folds. Every model uses identical sampled
-  midnight cutoffs and 24-hour horizons; ETS state and recursive regression lag inputs refresh
-  using only pre-cutoff load. The registered champion has the lowest validation MAPE.
-  SARIMAX remains supported but is excluded from the default run; current work prioritizes
-  weather exploration and regression following professor feedback.
-- **Evaluation:** the YAML report and returned results include MAE/RMSE (MW), MAPE (%), MASE,
-  and errors by hour, meteorological season, and US federal holiday, with group sample counts.
-  MASE uses one fixed training-only mean absolute daily seasonal difference (m=24); it is null
-  for a zero/undefined denominator. Per-hour prediction Parquets and explicit fit/cutoff
-  metadata support reproducibility. Fifty cutoffs are sampled across each evaluation period;
-  these results are not an all-days census.
-- **Weather analysis:** `src/forecasting/analysis_forecast.py` summarizes all training hours
-  in fixed temperature bins by season and compares saved regression predictions paired by
-  cutoff and forecast timestamp. The notebook exports `*_weather_analysis.json`/`.md`,
-  training temperature summaries, and daily comparison CSVs under the run's reports directory.
-  Comparisons include days improved/worse and seasonal, hourly, and holiday gains with
-  independent day counts. These are descriptive results, not test-driven feature selection.
-- **Weather (optional):** a `weather` block in `cleaning.yaml` makes the clean stage expect a second
-  raw file (`weather_hourly.csv`), aggregate its stations into a weighted regional series, and join
-  it as `wx_` columns; `weather_features` in `features.yaml` derives cooling/heating degree hours,
-  heat index, wind chill and trailing temperature means (`src/forecasting/weather.py`). Weather
-  values for future hours are observed historical weather: this is explicitly a
-  **perfect-weather-information experiment**, not an operational weather-forecast evaluation.
-  The no-weather model remains the serving fallback until a forecast feed is available.
-- **`unsupervised_explore` and `drift_report` are disabled** for this pipeline
-  (`config/pjm_load_forecast/orchestration.yaml`): PCA/k-means don't apply to a single univariate
-  series, and forecasting drift comparison isn't implemented.
-
-See the [`pjm_load_forecast`](#pjm_load_forecast--pjm-hourly-load-forecasting-forecasting-demo)
-entry under [Demo Pipelines](#demo-pipelines) for dataset setup and how to call the live
-forecasting endpoint.
-
-#### Model validation options
-
-Three optional blocks in `models.yaml` control how thoroughly a model is checked before it is
-registered. All are off by default; `hospital_readmission_lagged` enables all three.
-
-```yaml
-cross_validation:
-  enabled: true
-  folds: 5
-  group_column: "State"   # null = shuffled KFold; a column name = GroupKFold
-
-diagnostics:
-  enabled: true           # residual assumption tests
-  linear_types: ["ols", "ridge", "lasso", "elastic_net"]
-
-feature_importance:
-  enabled: true
-  top_n: 10
-
-evaluation:
-  min_test_r2: 0.0           # reject models no better than predicting the mean
-  max_test_rmse: 0.12        # reject models above this error
-  champion_metric: "cv_r2"   # or "test_rmse" (default)
-  cv_tie_tolerance: 0.005
-```
-
-- **`cross_validation`** — k-fold CV on the training set, run before the final fit so the hold-out
-  test set is never touched during model comparison. Setting `group_column` switches to
-  `GroupKFold`, keeping every row that shares a value inside one fold. Use it when observations are
-  not independent: in `hospital_readmission_lagged`, grouping by `State` drops the elastic net from
-  R² 0.072 to 0.051, because hospitals in a state share patient populations and referral patterns
-  and a random split lets the model see near-neighbours of its test cases.
-- **`diagnostics`** — Durbin-Watson (independence), Breusch-Pagan (homoscedasticity), Shapiro-Wilk
-  and Jarque-Bera (normality) on test residuals. Only model types listed in `linear_types` are
-  tested; tree ensembles make no distributional assumptions about their errors, so the same
-  statistics would not be interpretable for them.
-- **`feature_importance`** — ranked importance read from each model's own `coef_` (signed) or
-  `feature_importances_` (unsigned), so no explainability dependency is needed. The full ranking is
-  logged to MLflow as `feature_importance.json`; the top `top_n` goes into the evaluation report.
-- **`champion_metric`** — `test_rmse` picks the lowest hold-out RMSE. `cv_r2` picks the highest
-  cross-validated R², treats models within `cv_tie_tolerance` as tied, and breaks the tie on
-  fold-to-fold stability. It falls back to `test_rmse` if CV results are missing.
-
-All four appear per model in `reports/<pipeline>/<run_id>_evaluation.yaml` alongside the existing
-metrics, and as MLflow metrics/params on each run.
-
-**Key Feature:** `src/dags/dag_factory.py` auto-discovers pipeline directories and registers one Airflow DAG per pipeline. Add a new pipeline by dropping a new `config/<name>/` directory — no Python changes needed.
-
-### Testing
-
-**For comprehensive end-to-end testing guide, see [TESTING.md](TESTING.md).**
-
-Unit tests:
-```bash
-uv sync
-uv run pytest tests/test_pipeline.py -v   # 31 tests: config, validate, clean, features, profile
-```
-
-The TESTING.md guide covers:
-- Triggering the full DAG pipeline
-- Validating outputs at each stage
-- Checking MLflow model training and registration
-- Promoting models to Production
-- Testing FastAPI `/health` and `/predict` endpoints
-- Batch prediction validation
-- Troubleshooting common issues
-
-### Debugging & Diagnostics
-
-**For step-by-step pipeline debugging guide, see [DIAGNOSTICS.md](DIAGNOSTICS.md).**
-
-Quick diagnostic check: read Parquet outputs and query MLflow directly (see DIAGNOSTICS.md
-for copy-pasteable snippets), or use the MLflow UI's Runs tab to compare metrics across runs.
-
-The DIAGNOSTICS.md guide covers:
-- Understanding baseline vs model performance
-- Debugging each of 9 pipeline stages
-- Data quality checks at each step
-- Model performance interpretation (RMSE, improvement %)
-- Feature engineering validation
-- Configuration debugging
-- MLflow integration troubleshooting
-- Red flags and common issues
-
-### Development
-
-#### Running the DAG
-
-1. Open Airflow UI: http://localhost:8080
-2. Find `biomedical_clinical_pipeline`, `bioinfo_gene_pipeline`, or `hospital_readmission_lagged_pipeline`
-3. Click **Trigger DAG** (or wait for next scheduled run)
-4. Monitor task execution in the Graph view
-
-#### Monitoring
-
-- **MLflow Tracking:** http://localhost:5001 — browse runs, metrics, artifacts
-- **Profile & Drift Reports:** http://localhost:8888 — nginx directory listing; tasks `03_profile_data`, `06b_unsupervised_explore`, and `09_drift_report` each have a "Docs" tab with a direct link
-- **Logs:** `docker logs airflow-scheduler` or Airflow UI task logs
-
-## Stack
-
-- **Orchestration:** Apache Airflow 3 (LocalExecutor)
-- **Data Validation:** Pandera (schemas at boundaries)
-- **Profiling:** ydata-profiling (per-source HTML reports)
-- **Modeling:** scikit-learn (linear) + LightGBM (gradient boosting); `pjm_load_forecast` adds
-  `statsmodels` (ETS, SARIMAX) for time-series forecasting
-- **ML Tracking:** MLflow (Postgres backend, local artifacts)
-- **Drift Monitoring:** Evidently AI
-- **Serving:** FastAPI (model inference)
-- **Config:** Pydantic + YAML
-- **Storage:** Local Parquet, bind-mounted Docker volumes
-- **Database:** PostgreSQL 16 (separate instances for Airflow & MLflow)
+| File | Holds |
+|---|---|
+| `config/base/defaults.yaml` | Shared defaults (retries, MLflow URI) |
+| `orchestration.yaml` | DAG id, schedule, directories, optional-task toggles |
+| `pipeline.yaml` | Sources, target, problem type, split, validation rules |
+| `cleaning.yaml` | Imputation, protected columns, drop patterns |
+| `features.yaml` | Encoding, joins, NZV/VIF, scaling |
+| `models.yaml` | Models and hyperparameters, registration thresholds, champion metric, optional CV / diagnostics / feature importance |
 
 ## Demo Pipelines
 
-Each pipeline is just a `config/<name>/` directory — the code in `src/` is shared and unaware
-of which dataset it's processing.
+| Pipeline | Problem | Notes |
+|---|---|---|
+| `biomedical_clinical` | CMS Hospital Compare, pneumonia excess readmission ratio | Primary demo: multi-source pivot-joins, Box-Cox, VIF, six model types |
+| `bioinfo_gene` | Gene expression level | Same code, a different domain and a leaner config |
+| `hospital_readmission_lagged` | Predict 2025 readmission ratio from 2024 measures | One-year-ahead forecast. A leakage-prone CMS field was removed via `drop_columns` (test R² ~0.22 → an honest ~0.05-0.07) |
+| `pjm_load_forecast` | PJM East hourly load, 24h ahead | `problem_type: forecasting`, see below |
+| `m6_returns_risk` | Monthly ETF/stock log-returns (M6) | `problem_type: finance` |
 
-### `biomedical_clinical` — CMS Hospital Compare (primary demo)
+### `pjm_load_forecast`
 
-Multi-source CSV data, chosen because it needs the full range of the template's features:
-- **Rows:** ~4,800+ hospitals
-- **Columns:** Quality measures, HCAHPS scores, safety grades
-- **Target:** `ExcessReadmissionRatio` (pneumonia readmissions, continuous)
-- **Exercises:** pivot-join assembly across files, Box-Cox target transform, VIF pruning, all 6 model types, all 3 optional tasks
+For `problem_type: forecasting`, `dag_factory.py` swaps in the `src/forecasting/` stage functions
+for clean, features, train and register. The DAG shape stays the same.
 
-Place CSV or Parquet files in `data/biomedical_clinical/landing/` before running the DAG.
+- **Data:** [`PJME_hourly.csv`](https://www.kaggle.com/datasets/robikscube/hourly-energy-consumption)
+  in `data/pjm_load_forecast/landing/`, plus hourly weather for PHL/EWR/BWI/DCA from Open-Meteo
+  (`uv run python -m scripts.stage_pjm_load_forecast_landing`).
+- **Models:** daily and weekly naive baselines, ETS, recursive LightGBM with and without
+  weather, and a direct LightGBM benchmark. All are scored on the same 50 midnight cutoffs
+  with a 24-hour horizon. The champion is the model with the lowest validation MAPE.
+- **Result:** 2.72% test MAPE with weather vs 4.33% without and 6.89% for repeat-yesterday.
+  The weather runs use observed weather for the forecast hours, so this is a best case, not an
+  operational forecast.
+- **Serving:** `curl "http://localhost:8000/predict/forecast?horizon_hours=24"` after promoting a
+  model and setting `SERVING_MODEL_NAME`. Weather models return 501 until a weather forecast
+  feed exists, so serve `pjm_load_forecast_gbm_no_weather`.
+- **Notebooks:**
+  - `notebooks/pjm_load_forecast_pipeline.ipynb`: walkthrough using the pipeline code
+  - `notebooks/pjm_load_forecast_colab.ipynb`: standalone Google Colab version with the same results
 
-### `bioinfo_gene` — gene expression (second demo)
+## Stack
 
-A deliberately different domain, added to prove the config-driven claim rather than to be
-fully tuned:
-- **Target:** `expression_level` (continuous)
-- **Exercises:** a leaner config (2 models, no join strategy), profiling on but clustering/drift
-  off via `tasks.enabled` — showing the same DAG factory adapts without touching Python
+Airflow 3 (LocalExecutor) · pandera · ydata-profiling · pandas · scikit-learn + LightGBM
+(+ statsmodels for forecasting) · MLflow (Postgres backend, local artifacts) · Evidently · FastAPI ·
+Pydantic + YAML · local Parquet with manifest checksums · uv.
 
-Place CSV files in `data/bioinfo_gene/landing/` before running its DAG.
+## Testing & Debugging
 
-### `hospital_readmission_lagged` — one-period-ahead forecast (third demo)
-
-Same CMS Hospital Compare source as `biomedical_clinical`, but a deliberately different problem
-shape: predicts each hospital's **2025** pneumonia excess readmission ratio from its **2024**
-quality measures (a lagged, one-year-ahead forecast), instead of same-year association.
-- **Rows:** ~3,063 hospitals matched across both years
-- **Target:** `Excess Readmission Ratio` (pneumonia, `READM-30-PN-HRRP`, continuous)
-- **Exercises:** the same pivot-join assembly as `biomedical_clinical`, plus a direct-join source
-  (`Hospital_General_Information`, already one row per hospital — no pivot needed)
-
-**Leakage lesson (worth reading if you're extending this pipeline or adding your own):** an early
-version scored much higher (test R² ~0.22) because `Count of READM Measures Better/Worse` — a
-CMS-computed field from the *same* 2024 hospital-quality file — turned out to be a coarsened
-proxy for the hospital's own historical readmission performance, verified by checking its
-correlation against the *contemporaneous* 2024 ratio (0.44) vs. the actual 2025 target (0.39) —
-nearly identical strength, the signature of a proxy riding on year-over-year persistence
-(measured directly at 0.81) rather than real predictive signal. Removed via `drop_columns` in
-`config/hospital_readmission_lagged/features.yaml`; true test R² dropped to ~0.05–0.07 — a
-lower but honest number. The general lesson: any field derived from the *same underlying
-event* as the target, even under a different name or computed by a different party (here, CMS's
-own star-rating methodology), deserves the same suspicion as an obviously duplicated column.
-
-### `pjm_load_forecast` — PJM hourly load forecasting (forecasting demo)
-
-A genuinely different problem shape from the three pipelines above — one univariate hourly time
-series, not a row-per-entity feature matrix. See [Forecasting Pipelines](#forecasting-pipelines)
-for how the DAG dispatches to a parallel set of stage functions for this `problem_type`.
-
-- **Source:** [`robikscube/hourly-energy-consumption`](https://www.kaggle.com/datasets/robikscube/hourly-energy-consumption)
-  on Kaggle (`PJME_hourly.csv`) — hourly electricity load (MW) for the PJM Interconnection's PJME
-  zone, 2002-2018. Not committed to the repo (download it yourself and place it in the landing
-  zone below).
-- **Target:** `PJME_MW` (continuous, always positive).
-- **Weather:** hourly temperature, dew point, humidity and wind for PHL, EWR, BWI and DCA from the
-  [Open-Meteo Historical Weather API](https://open-meteo.com/en/docs/historical-weather-api) (free,
-  no key), staged by `scripts/stage_pjm_load_forecast_landing.py`.
-- **Models:** daily and weekly seasonal-naive baselines, ETS, recursive LightGBM with weather and without, and direct lead-conditioned LightGBM with weather
-  (`config/pjm_load_forecast/models.yaml`) — see
-  [Forecasting Pipelines](#forecasting-pipelines) above.
-
-**Setup and running the pipeline end-to-end:**
-
-1. Download `PJME_hourly.csv` from the Kaggle link above and place it at
-   `data/pjm_load_forecast/landing/PJME_hourly.csv`.
-2. Stage the weather companion file (one-off, ~70 API calls, a couple of minutes):
-   ```bash
-   uv run python -m scripts.stage_pjm_load_forecast_landing
-   ```
-   This writes `data/pjm_load_forecast/landing/weather_hourly.csv`. To run without weather instead,
-   delete the `weather` block from `cleaning.yaml` and `weather_features` from `features.yaml`.
-3. Trigger `pjm_load_forecast_pipeline` in the Airflow UI (http://localhost:8080), same as any
-   other pipeline — see [Running the DAG](#running-the-dag).
-4. Check training results in MLflow (http://localhost:5001): each run logs six model entries
-   (`pjm_load_forecast_daily_naive`, `pjm_load_forecast_seasonal_naive`, `pjm_load_forecast_ets`, `pjm_load_forecast_gbm`,
-   `pjm_load_forecast_gbm_no_weather`, `pjm_load_forecast_gbm_direct`), each with
-   `cv_mape_mean`/`cv_mape_std` (chronological validation, fitted before its first cutoff) and, after the register stage,
-   `test_mape_mean` (held-out test-set scoring) as a model-version tag. The run champion (lowest
-   `cv_mape`) is tagged `run_champion: true` on its registered version, mirroring the tabular
-   pipelines' champion/challenger tagging. Both seasonal-naive baselines appear with `status: baseline`; direct LightGBM appears with
-   `status: benchmark`. All three include complete comparison metrics and are not registered.
-5. Promote a model version to Production in the MLflow UI (manual click, same as every other
-   pipeline — no auto-promotion).
-6. Set `SERVING_MODEL_NAME` to the promoted model's full name (e.g. `pjm_load_forecast_gbm_no_weather`) and
-   restart the `fastapi` container, then call the live forecasting endpoint:
-   ```bash
-   curl "http://localhost:8000/predict/forecast?horizon_hours=24"
-   ```
-   Returns a JSON list of `horizon_hours` timestamped predictions. `horizon_hours` can go up to
-   168 (one week), but each model's cross-validated accuracy evidence only covers
-   `config/pjm_load_forecast/models.yaml`'s `evaluation.horizon_hours` (24 by default) — a request
-   beyond that horizon still returns a forecast, just one increasingly extrapolated past the
-   horizon the model was actually validated on. A model trained with weather returns HTTP 501:
-   serving has no weather forecast feed yet, so serve the no-weather GBM.
-
-**Known limitation — MSTL report runtime at full dataset scale:** the `profile` task's MSTL
-seasonal decomposition report (`generate_mstl_report`, daily + weekly +, for a long enough
-series, annual periods) takes roughly 8 minutes against the full `PJME_hourly.csv` (~145,000
-rows spanning 2002-2018), since statsmodels' STL decomposition scales with both series length and
-number of periods. No `execution_timeout` is set on this task. This is acceptable for this POC's
-`@weekly` schedule but would need either a timeout or a periods-limited fast path before this
-pattern is reused on a much larger or more frequently-scheduled series.
-
-## Key Design Decisions
-
-1. **One DAG, task groups:** Single orchestration DAG with 9 task groups for clarity
-2. **Manifest versioning:** `src/utils/io.py` consolidates all I/O helpers (readers, writers, manifest read/write, path resolution); every stage imports from here — no duplicated file logic
-3. **Pandera schemas:** Config-driven validation at raw boundaries; `per_file_schemas` in `pipeline.yaml` allows per-file required columns and bounds without touching Python
-4. **Config-driven sentinel values:** Dataset-specific missing-value strings (e.g. "Not Available") declared in `pipeline.yaml` under `validation.sentinel_values`; both Stage 2 (validate) and Stage 4 (clean) read from the same source
-5. **Pivot-join feature assembly:** `features.yaml` join strategy config filters and pivots multi-source files onto a spine; no code changes needed to add join sources
-6. **VIF pruning is optional:** Set `vif_threshold: null` in `features.yaml` to skip VIF pruning for datasets with intentionally correlated predictors (e.g. HCAHPS survey questions)
-7. **Config-driven unsupervised exploration:** Stage 06b algorithm (kmeans/skip), PCA toggle, and `max_k` are all in `pipeline.yaml`; different datasets can disable or tune without touching code
-8. **Config-driven optional tasks:** `profile`, `unsupervised_explore`, and `drift_report` are toggled per pipeline via `tasks.enabled` in `orchestration.yaml`; `dag_factory.py` only creates and wires a task when its flag is `true` — no Python changes needed to trim the DAG for a new pipeline
-9. **No auto-promotion:** Manual MLflow UI click to move models to Production
-10. **LocalExecutor:** Single-machine orchestration (suitable for POC)
-11. **Separate Postgres:** Airflow metadata and MLflow tracking use distinct databases
-12. **Read-only MLflow artifacts:** FastAPI mounts artifacts as read-only
-13. **On-demand drift:** Drift monitoring runs inside training DAG as final optional task
-14. **Reports server:** nginx container at `:8888` serves `reports/` with directory listing; URL per pipeline set in `orchestration.yaml` (`reports_base_url`); Airflow task "Docs" tab links directly to it
-15. **Forecasting via dispatch, not a second template:** `dag_factory.py` reads `problem_type` and swaps in forecasting-specific stage functions/config classes for `clean`/`feature_engineer`/`train`/`register` (see [Forecasting Pipelines](#forecasting-pipelines)) — the DAG shape and every tabular pipeline are unaffected, and adding a forecasting pipeline still requires no Python changes, same as the tabular case
-
-## Troubleshooting
-
-### Airflow webserver not accessible
 ```bash
-docker logs airflow-webserver
-docker compose restart airflow-webserver
+uv run pytest tests/ -v
 ```
 
-### MLflow models not visible
-```bash
-curl http://localhost:5000/health
-# If unhealthy, check:
-docker logs mlflow-server
-```
+- [TESTING.md](TESTING.md): end-to-end run, MLflow checks, promotion, `/predict`
+- [DIAGNOSTICS.md](DIAGNOSTICS.md): debugging each stage, reading metrics, common issues
+- [scripts/README.md](scripts/README.md): landing-zone staging scripts
 
-### Data validation failures
-Check schema definitions in `src/schemas/` and ensure raw/feature data matches.
-
-### Running tests fails
-```bash
-uv sync  # Ensure all dependencies installed
-uv run pytest tests/ -v  # Full verbose output
-```
-
-## Next Steps
-
-1. Place sample Hospital Compare CSVs in `data/biomedical_clinical/landing/` (or your own data in
-   a new `config/<pipeline>/landing/` — see [Demo Pipelines](#demo-pipelines) for what a second
-   pipeline needs)
-2. Follow the [TESTING.md](TESTING.md) guide to:
-   - Trigger `biomedical_clinical_pipeline` DAG in Airflow
-   - Validate outputs at each stage (raw → interim → features → models)
-   - Promote a trained model to Production in MLflow
-   - Test FastAPI `/predict` endpoint with sample data
-3. Monitor in UIs:
-   - **Airflow UI**: http://localhost:8080 (DAG progress)
-   - **MLflow UI**: http://localhost:5000 (model metrics & registry)
-   - **FastAPI Docs**: http://localhost:8000/docs (interactive API testing)
-4. Scale and deploy:
-   - Move to Kubernetes for production deployment
-   - Set up monitoring dashboards (Grafana)
-   - Automate scheduled retraining runs
+Quick fixes: `docker logs <service>` and `docker compose restart <service>`. If MLflow looks
+down, check `curl http://localhost:5001/health`.
