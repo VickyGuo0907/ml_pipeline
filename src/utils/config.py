@@ -377,6 +377,33 @@ class TuningConfig(BaseModel):
     )
 
 
+class WeatherStationConfig(BaseModel):
+    """One weather station feeding the regional weather average."""
+
+    name: str = Field(..., description="Station label as written in the weather landing file's station column")
+    latitude: float = Field(..., ge=-90, le=90)
+    longitude: float = Field(..., ge=-180, le=180)
+    weight: float = Field(default=1.0, gt=0, description="Relative weight in the regional average")
+
+
+class WeatherCleaningConfig(BaseModel):
+    """Optional hourly weather companion file for a forecasting pipeline.
+
+    When present, the clean stage expects a second raw file (matched by
+    file_pattern), aggregates its stations into one weighted regional series,
+    and joins it onto the target series as wx_ columns.
+    """
+
+    file_pattern: str = Field(
+        default="weather_hourly", description="Substring identifying the weather raw file",
+    )
+    stations: list[WeatherStationConfig] = Field(..., min_length=1)
+    max_gap_hours: int = Field(
+        default=6, ge=1,
+        description="Weather gaps longer than this fail the clean stage instead of being interpolated",
+    )
+
+
 class ForecastCleaningConfig(BaseModel):
     """Gap-handling rules for the forecasting clean stage.
 
@@ -395,6 +422,25 @@ class ForecastCleaningConfig(BaseModel):
         default="interpolate",
         description="How gaps at or under max_gap_hours are filled",
     )
+    weather: WeatherCleaningConfig | None = Field(
+        default=None, description="Optional hourly weather file joined onto the target series",
+    )
+
+
+class WeatherFeaturesConfig(BaseModel):
+    """Weather-derived features (all prefixed wx_). Requires cleaning.yaml's
+    weather block, which supplies the raw wx_ columns these are built from."""
+
+    enabled: bool = Field(default=True)
+    comfort_temp_f: float = Field(
+        default=65.0, description="Base temperature for cooling/heating degree hours (wx_cdh / wx_hdh)",
+    )
+    rolling_windows: list[int] = Field(
+        default_factory=lambda: [24, 72],
+        description="Trailing temperature-mean windows in hours (thermal inertia of buildings)",
+    )
+    heat_index: bool = Field(default=True, description="Add wx_heat_index_f (NWS heat index)")
+    wind_chill: bool = Field(default=True, description="Add wx_wind_chill_f (NWS wind chill)")
 
 
 class ForecastFeaturesConfig(BaseModel):
@@ -423,6 +469,9 @@ class ForecastFeaturesConfig(BaseModel):
     snapshot_hours: int = Field(
         default=168, ge=1,
         description="How many trailing hours of the series to snapshot per run for serving-time lag seeding",
+    )
+    weather_features: WeatherFeaturesConfig | None = Field(
+        default=None, description="Weather-derived features; None or enabled=false disables them",
     )
 
     @model_validator(mode="after")
@@ -478,7 +527,9 @@ class ForecastModelsConfig(BaseModel):
     that governs rolling-origin scoring instead.
     """
 
-    models: list[ModelConfig] = Field(..., description="Model definitions (types: ets, sarimax, gbm)")
+    models: list[ModelConfig] = Field(
+        ..., description="Model definitions (types: seasonal_naive, ets, sarimax, gbm, gbm_direct)",
+    )
     random_state: int = Field(default=42)
     train_test_split: float = Field(
         default=0.8, ge=0.0, le=1.0,

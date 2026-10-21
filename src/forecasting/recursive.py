@@ -97,6 +97,7 @@ def recursive_forecast(
     rolling_windows: list[int],
     calendar_features: bool,
     holiday_features: bool,
+    exog: pd.DataFrame | None = None,
 ) -> pd.Series:
     """Recursively forecast `horizon` future hourly steps from a fitted model.
 
@@ -119,10 +120,19 @@ def recursive_forecast(
         lags, rolling_windows, calendar_features, holiday_features: Same
             feature-engineering config as engineer_forecast_features, so
             per-step features match what the model was trained on.
+        exog: Known-in-advance exogenous feature values (the wx_ weather
+            columns) indexed by timestamp, covering every forecast step.
+            Unlike lag/rolling features these don't depend on the target, so
+            they're read directly per step rather than rebuilt. Required when
+            feature_columns contains any column _build_feature_row doesn't
+            produce.
 
     Returns:
         Series of `horizon` predicted values, DatetimeIndex continuing
         directly from history.
+
+    Raises:
+        ValueError: If exog is needed but missing a forecast timestamp.
     """
     buffer = history.copy()
     holidays = None
@@ -140,6 +150,13 @@ def recursive_forecast(
         row = _build_feature_row(
             buffer, next_ts, lags, rolling_windows, calendar_features, holiday_features, holidays,
         )
+        if exog is not None:
+            if next_ts not in exog.index:
+                raise ValueError(
+                    f"Exogenous (weather) features have no row for forecast step {next_ts}; "
+                    f"they must cover the full forecast horizon."
+                )
+            row.update(exog.loc[next_ts].to_dict())
         X_row = pd.DataFrame([row], index=[next_ts])[feature_columns]
         pred = float(model.predict(X_row)[0])
         predictions.append(pred)

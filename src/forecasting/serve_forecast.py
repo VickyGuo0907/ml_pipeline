@@ -24,6 +24,7 @@ import pandas as pd
 from pandas.tseries.holiday import USFederalHolidayCalendar
 
 from src.forecasting.recursive import recursive_forecast
+from src.forecasting.weather import weather_columns
 from src.utils.io import find_latest_run_id, resolve_run_path
 
 logger = logging.getLogger(__name__)
@@ -92,6 +93,7 @@ def forecast_with_gbm(
     rolling_windows: list[int],
     calendar_features: bool,
     holiday_features: bool,
+    exog: pd.DataFrame | None = None,
 ) -> pd.Series:
     """Forecast horizon_hours ahead from a fitted GBM model, seeded by the
     latest real snapshot.
@@ -107,12 +109,28 @@ def forecast_with_gbm(
             pipeline's own config/<pipeline_type>/features.yaml by the
             caller (src/serve.py), not duplicated here.
 
+        exog: Future weather (wx_) feature rows covering every forecast hour.
+            Required when the model was trained with weather features.
+
     Returns:
         Series of horizon_hours predicted values, DatetimeIndex continuing
         from the snapshot's last timestamp.
+
+    Raises:
+        ValueError: If the model uses weather features and no exog is given.
+            Live serving has no weather forecast feed yet, and silently
+            substituting stale or zero weather would produce a confident but
+            wrong forecast.
     """
+    if weather_columns(feature_columns) and exog is None:
+        raise ValueError(
+            "This model was trained with weather (wx_) features and needs future weather "
+            "values to forecast; no weather forecast feed is wired into serving yet. "
+            "Serve the no-weather GBM, or supply exog."
+        )
     history = snapshot[target_col]
     return recursive_forecast(
         model, history, horizon_hours, feature_columns,
         lags, rolling_windows, calendar_features, holiday_features,
+        exog=exog,
     )

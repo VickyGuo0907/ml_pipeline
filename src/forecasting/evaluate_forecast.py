@@ -1,31 +1,6 @@
-"""Evaluation/registration stage for time-series forecasting pipelines:
-rolling-origin test-set scoring, champion selection, and MLflow Staging
-registration.
-
-Plan 3's cv_mape_mean is a training-set-only estimate (rolling-origin CV
-within train.parquet). This stage adds the genuine held-out generalization
-estimate: each already-trained model is loaded back from MLflow by its
-logged flavor and scored via the same rolling-origin mechanism, but at
-origins drawn from the TEST period — statsmodels models score with
-dynamic=False (see src/forecasting/rolling_origin.py's docstring for why
-out-of-sample origins need this), GBM scores via the same recursive_forecast
-path as training, just against test-period origins with a longer combined
-train+test history to draw lag features from.
-
-NO auto-promotion to Production — manual UI click only, mirrors the
-tabular src/evaluate.py's registration pattern exactly.
-
-CAVEAT on test_mape_mean for ets/sarimax: this stage scores statsmodels
-models with dynamic=False (out-of-sample), which is NOT horizon-anchored the
-way GBM's test_mape_mean is — see src/forecasting/rolling_origin.py's module
-docstring for why. In short, an ets/sarimax test_mape_mean reflects a forecast
-lead time that grows with how far each origin sits past the end of training,
-while GBM's reflects a genuine fresh horizon_hours-ahead forecast at every
-origin. Do not treat test_mape_mean as an apples-to-apples number across
-model families when comparing ets/sarimax to gbm.
-"""
+"""Shared daily-cutoff evaluation, audit reporting, and Staging registration."""
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -35,14 +10,23 @@ import mlflow.statsmodels
 import pandas as pd
 
 from src.evaluate import _write_evaluation_report
-from src.forecasting.rolling_origin import score_gbm_origins, score_statsmodels_origins, select_cv_origins
-from src.utils.config import load_forecast_features_config, load_forecast_models_config, load_pipeline_config
+from src.forecasting.rolling_origin import (
+    evaluate_origins,
+    select_cv_origins,
+)
+from src.utils.config import (
+    load_forecast_features_config,
+    load_forecast_models_config,
+    load_pipeline_config,
+)
 from src.utils.io import resolve_run_path
 
 logger = logging.getLogger(__name__)
 
 
-def _select_forecast_champion(model_metrics: dict[str, dict[str, float | None]], champion_metric: str) -> str:
+def _select_forecast_champion(
+    model_metrics: dict[str, dict[str, float | None]], champion_metric: str
+) -> str:
     """Pick the run champion: lowest value of champion_metric (MAPE — lower is
     better). Falls back to test_mape if any registered model is missing the
     configured metric — mirrors the tabular evaluate.py's cv_r2-missing
@@ -106,7 +90,9 @@ def register_forecast_models_to_mlflow(
     if not mlflow_run_ids:
         raise ValueError("mlflow_run_ids required for model registration")
     if features_dir is None:
-        raise ValueError("features_dir required to load train/test parquet for rolling-origin test scoring")
+        raise ValueError(
+            "features_dir required to load train/test parquet for rolling-origin test scoring"
+        )
 
     mlflow.set_tracking_uri(mlflow_tracking_uri)
     pipeline_cfg = load_pipeline_config(config_dir)
@@ -119,15 +105,26 @@ def register_forecast_models_to_mlflow(
     train_df = pd.read_parquet(features_path / "train.parquet")
     test_df = pd.read_parquet(features_path / "test.parquet")
     full_df = pd.concat([train_df, test_df]).sort_index()
-    full_y = full_df[target_col]
-    feature_columns = [c for c in train_df.columns if c != target_col]
 
-    origins = select_cv_origins(test_df.index, eval_cfg.n_windows, eval_cfg.horizon_hours)
+    origins = select_cv_origins(test_df.index, eval_cfg.n_windows, eval_cfg.horizon_hours, 0)
 
     client = mlflow.tracking.MlflowClient(tracking_uri=mlflow_tracking_uri)
-    timestamp = datetime.now(timezone.utc).isoformat()
+    timestamp = datetime.now(UTC).isoformat()
 
-    report: dict[str, Any] = {"run_id": run_id, "evaluated_at": timestamp, "models": {}}
+    report: dict[str, Any] = {
+        "run_id": run_id,
+        "evaluated_at": timestamp,
+        "models": {},
+        "protocol": {
+            "cutoff_hour": 0,
+            "horizon_hours": eval_cfg.horizon_hours,
+            "cutoffs": [str(o) for o in origins],
+            "parameter_refit": "once on train; fixed throughout test",
+            "state_refresh": "pre-cutoff observations only",
+            "mase": "training-only mean absolute daily seasonal difference (m=24)",
+            "weather": "historical weather is a perfect-weather-information experiment",
+        },
+    }
     registration_results: dict[str, Any] = {"registered_models": {}}
     infra_failures: list[str] = []
     model_metrics: dict[str, dict[str, float | None]] = {}
@@ -142,32 +139,47 @@ def register_forecast_models_to_mlflow(
             cv_mape_mean = metrics.get("cv_mape_mean")
 
             model_uri = f"runs:/{mlflow_run_id}/model"
-            if model_type in ("ets", "sarimax"):
+            model_columns = []
+            if model_type == "seasonal_naive":
+                loaded = None
+            elif model_type in ("ets", "sarimax"):
                 loaded = mlflow.statsmodels.load_model(model_uri)
-                # SARIMAX fit with use_holiday_exog (see model_registry.fit_sarimax)
-                # needs its exog column re-supplied for out-of-sample scoring —
-                # k_exog > 0 tells us the loaded model actually has a regression
-                # component (ETS never does; SARIMAX only does when configured).
-                exog = None
-                if getattr(loaded.model, "k_exog", 0) > 0 and "is_holiday" in full_df.columns:
-                    exog = full_df["is_holiday"]
-                window_scores = score_statsmodels_origins(
-                    loaded, full_y, origins, eval_cfg.horizon_hours, dynamic=False, exog=exog,
-                )
-            elif model_type == "gbm":
+            elif model_type in ("gbm", "gbm_direct"):
                 loaded = mlflow.lightgbm.load_model(model_uri)
-                window_scores = score_gbm_origins(
-                    loaded, full_df, target_col, feature_columns, origins, eval_cfg.horizon_hours,
-                    features_cfg.lags, features_cfg.rolling_windows,
-                    features_cfg.calendar_features, features_cfg.holiday_features,
-                )
+                model_columns = mlflow.artifacts.load_dict(
+                    f"runs:/{mlflow_run_id}/feature_columns.json"
+                )["columns"]
             else:
-                raise ValueError(f"Unknown forecasting model type '{model_type}' for {model_name}")
-
-            if not window_scores:
-                raise ValueError(f"No scorable rolling-origin windows on the test set for {model_name}.")
-            test_mape_mean = float(pd.Series(window_scores).mean())
-            test_mape_std = float(pd.Series(window_scores).std())
+                raise ValueError(f"Unknown forecasting model type '{model_type}'")
+            evaluation_metrics, predictions = evaluate_origins(
+                loaded,
+                model_type,
+                full_df,
+                target_col,
+                model_columns,
+                origins,
+                eval_cfg.horizon_hours,
+                features_cfg,
+                train_df[target_col],
+                int(run.data.params.get("season_length", 168)),
+            )
+            prediction_dir = Path(reports_dir)
+            prediction_dir.mkdir(parents=True, exist_ok=True)
+            prediction_path = prediction_dir / f"{run_id}_{model_name}_predictions.parquet"
+            predictions.to_parquet(prediction_path)
+            evaluation_metrics["predictions_path"] = str(prediction_path)
+            test_mape_mean = evaluation_metrics["test_mape_mean"]
+            test_mape_std = evaluation_metrics["test_mape_std"]
+            if model_type in ("seasonal_naive", "gbm_direct"):
+                result = {
+                    "status": "baseline" if model_type == "seasonal_naive" else "benchmark",
+                    "source_run_id": mlflow_run_id,
+                    "cv_mape_mean": cv_mape_mean,
+                    **evaluation_metrics,
+                }
+                report["models"][model_name] = result
+                registration_results["registered_models"][model_name] = dict(result)
+                continue
 
             registered_model = mlflow.register_model(model_uri=model_uri, name=model_name)
             version = registered_model.version
@@ -199,7 +211,9 @@ def register_forecast_models_to_mlflow(
 
             logger.info(
                 "REGISTERED %s v%s to Staging (test_mape_mean=%.2f%%, cv_mape_mean=%s)",
-                model_name, version, test_mape_mean,
+                model_name,
+                version,
+                test_mape_mean,
                 f"{cv_mape_mean:.2f}%" if cv_mape_mean is not None else "n/a",
             )
 
@@ -209,7 +223,7 @@ def register_forecast_models_to_mlflow(
                 "test_mape_mean": test_mape_mean,
                 "test_mape_std": test_mape_std,
                 "cv_mape_mean": cv_mape_mean,
-                "n_windows_scored": len(window_scores),
+                **evaluation_metrics,
             }
             model_metrics[model_name] = {"cv_mape": cv_mape_mean, "test_mape": test_mape_mean}
             registration_results["registered_models"][model_name] = {
@@ -221,19 +235,23 @@ def register_forecast_models_to_mlflow(
                 "test_mape_mean": test_mape_mean,
                 "cv_mape_mean": cv_mape_mean,
                 "registered_at": timestamp,
+                **evaluation_metrics,
             }
         except Exception as e:
             logger.error("Error evaluating/registering %s: %s", model_name, e)
             report["models"][model_name] = {"status": "error", "error": str(e)}
             registration_results["registered_models"][model_name] = {
-                "status": "error", "error": str(e), "source_run_id": mlflow_run_id,
+                "status": "error",
+                "error": str(e),
+                "source_run_id": mlflow_run_id,
             }
             infra_failures.append(model_name)
 
     registered = [k for k, v in report["models"].items() if v["status"] == "registered"]
     if registered:
         champion_name = _select_forecast_champion(
-            {n: model_metrics[n] for n in registered}, eval_cfg.champion_metric,
+            {n: model_metrics[n] for n in registered},
+            eval_cfg.champion_metric,
         )
         report["run_champion"] = champion_name
         report["champion_metric"] = eval_cfg.champion_metric
@@ -241,14 +259,18 @@ def register_forecast_models_to_mlflow(
         try:
             client.set_model_version_tag(champion_name, champion_version, "run_champion", "true")
         except Exception as e:
-            logger.warning("Could not tag run champion %s v%s: %s", champion_name, champion_version, e)
+            logger.warning(
+                "Could not tag run champion %s v%s: %s", champion_name, champion_version, e
+            )
     else:
         report["run_champion"] = None
 
     _write_evaluation_report(report, run_id, reports_dir)
 
     logger.info(
-        "Forecast evaluation complete: %d registered, %d errors", len(registered), len(infra_failures),
+        "Forecast evaluation complete: %d registered, %d errors",
+        len(registered),
+        len(infra_failures),
     )
 
     if infra_failures:
@@ -258,4 +280,5 @@ def register_forecast_models_to_mlflow(
     if not registered:
         raise ValueError(f"No forecasting models could be scored/registered for run {run_id}.")
 
+    registration_results["protocol"] = report["protocol"]
     return registration_results
